@@ -2,7 +2,7 @@ import logging
 import time
 from typing import Dict, List, Any, Optional
 
-from app.config import NEWS_SOURCES, SCHEDULER_INTERVAL_HOURS
+from app.core.config import get_settings, NEWS_SOURCES, SCHEDULER_INTERVAL_HOURS
 from app.core.scheduler import scheduler
 from app.scrapers.mihan_blockchain import MihanBlockchainScraper
 from app.services.api_client import APIClient

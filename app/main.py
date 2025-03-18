@@ -6,6 +6,7 @@ from app.core.config import get_settings
 from app.routers.api import router as api_router
 from app.controllers.scraper_controller import scraper_controller
 from app.core.scheduler import scheduler
+from app.routers import monitoring
 
 # Configure logging
 settings = get_settings()
@@ -33,6 +34,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(api_router)
+app.include_router(monitoring.router)
 
 @app.on_event("startup")
 async def startup_event():

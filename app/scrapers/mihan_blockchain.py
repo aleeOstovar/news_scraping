@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 from persiantools.jdatetime import JalaliDateTime
 
-from app.config import PERSIAN_MONTHS
+from app.core.config import PERSIAN_MONTHS
 from app.models.article import ArticleLinkModel, ArticleContentModel, ArticleFullModel, ImageModel
 from app.scrapers.base_scraper import BaseScraper
 from app.services.api_client import APIClient

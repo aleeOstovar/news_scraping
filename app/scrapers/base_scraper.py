@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 import requests
 from bs4 import BeautifulSoup
 
-from app.config import USER_AGENT, ARTICLE_DELAY_SECONDS
+from app.core.config import USER_AGENT, ARTICLE_DELAY_SECONDS
 from app.models.article import ArticleLinkModel, ArticleContentModel, ArticleFullModel
 from app.services.api_client import APIClient
 

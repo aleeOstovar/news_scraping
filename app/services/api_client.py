@@ -5,7 +5,7 @@ from typing import Dict, Any, Optional
 import requests
 from requests.exceptions import RequestException
 
-from app.config import API_BASE_URL, API_KEY
+from app.core.config import API_BASE_URL, API_KEY
 
 logger = logging.getLogger(__name__)
 
