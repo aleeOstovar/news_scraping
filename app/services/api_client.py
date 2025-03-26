@@ -27,7 +27,12 @@ class APIClient:
             api_key: API key if required
             max_retries: Maximum number of retry attempts for failed requests
         """
+        # Normalize the base URL to ensure it doesn't have trailing slashes
         self.base_url = base_url.rstrip('/')
+        
+        # Add logging to show the actual base URL being used
+        logger.info(f"Using API base URL: {self.base_url}")
+        
         self.api_key = api_key
         self.max_retries = max_retries
         self.session = requests.Session()
@@ -42,6 +47,22 @@ class APIClient:
             
         logger.info(f"Initialized API client for {self.base_url}")
         
+    def build_url(self, endpoint: str) -> str:
+        """
+        Build a URL for the API endpoint, ensuring proper formatting.
+        
+        Args:
+            endpoint: The API endpoint (e.g., '/news-posts')
+            
+        Returns:
+            The complete URL with base URL and endpoint
+        """
+        # Ensure the endpoint starts with a slash
+        if not endpoint.startswith('/'):
+            endpoint = f'/{endpoint}'
+            
+        return f"{self.base_url}{endpoint}"
+        
     def post_news_data(self, data: Dict[str, Any]) -> Dict:
         """
         Post news data to the API
@@ -55,8 +76,20 @@ class APIClient:
         Raises:
             RequestException: If the request fails after all retries
         """
-        endpoint = '/api/v1/news-posts'
-        url = f"{self.base_url}{endpoint}"
+        url = self.build_url('/news-posts')
+        
+        # Log data summary for debugging
+        data_summary = {
+            "title": data.get('title', 'N/A'),
+            "sourceUrl": data.get('sourceUrl', 'N/A'),
+            "content_length": len(data.get('content', [])) if isinstance(data.get('content', []), list) else 'Not a list',
+            "imagesUrl_count": len(data.get('imagesUrl', [])) if isinstance(data.get('imagesUrl', []), list) else 'Not a list',
+            "tags_count": len(data.get('tags', [])) if isinstance(data.get('tags', []), list) else 'Not a list',
+        }
+        logger.info(f"Preparing to send article: {data_summary}")
+        
+        # Log the complete payload - this is very important for debugging
+        logger.info(f"Complete article payload: {data}")
         
         for attempt in range(self.max_retries):
             try:
@@ -67,15 +100,47 @@ class APIClient:
                     headers=self.headers
                 )
                 
+                # Log response status
+                logger.info(f"Response status code: {response.status_code}")
+                
+                # If we got an error response but not an exception, log it
+                if response.status_code >= 400:
+                    try:
+                        error_content = response.json()
+                        logger.error(f"Error response from API: {error_content}")
+                    except Exception:
+                        logger.error(f"Error response from API (not JSON): {response.text[:500]}")
+                
                 response.raise_for_status()
-                logger.info("Successfully sent data to API")
-                return response.json()
+                response_data = response.json()
+                logger.info(f"Successfully sent article: {data.get('title', 'Unknown')} to API, received response: {response_data}")
+                return response_data
                 
             except RequestException as e:
+                # Log detailed error info
                 logger.error(f"Attempt {attempt + 1} failed: {str(e)}")
+                
+                # Try to extract more detail from the response if available
+                if hasattr(e, 'response') and e.response is not None:
+                    try:
+                        error_content = e.response.json()
+                        logger.error(f"Error details from API: {error_content}")
+                    except Exception:
+                        logger.error(f"Error response (not JSON): {e.response.text[:500] if e.response.text else 'Empty response'}")
+                
                 if attempt == self.max_retries - 1:
+                    logger.error(f"All {self.max_retries} attempts to send article failed: {data.get('title', 'Unknown')}")
+                    
+                    # Log a specific error for articles that fail to post
+                    error_msg = f"⚠️ ARTICLE POST FAILED: '{data.get('title', 'Unknown')}' ({data.get('sourceUrl', 'Unknown')}) - All {self.max_retries} attempts failed"
+                    logger.error(error_msg)
+                    
                     raise
-                time.sleep(2 ** attempt)  # Exponential backoff
+                
+                # Exponential backoff before retry
+                sleep_seconds = 2 ** attempt
+                logger.info(f"Waiting {sleep_seconds} seconds before retry...")
+                time.sleep(sleep_seconds)
                 
         raise RequestException("Failed to send data after all retry attempts")
     
@@ -89,19 +154,31 @@ class APIClient:
         Returns:
             True if the article exists, False otherwise
         """
-        endpoint = '/api/v1/news-posts/check'
-        url = f"{self.base_url}{endpoint}"
+        url = self.build_url('/news-posts/check')
         
         try:
+            logger.info(f"Checking if article exists: {source_url}")
             response = self.session.post(
                 url=url,
                 json={"sourceUrl": source_url},
                 headers=self.headers
             )
             
+            logger.info(f"Check article response status: {response.status_code}")
+            
             if response.status_code == 200:
                 result = response.json()
-                return result.get('exists', False)
+                exists = result.get('exists', False)
+                logger.info(f"Article exists check result: {exists}")
+                return exists
+            
+            # Log error response
+            if response.status_code >= 400:
+                try:
+                    error_content = response.json()
+                    logger.error(f"Error checking if article exists: {error_content}")
+                except Exception:
+                    logger.error(f"Error checking if article exists (not JSON): {response.text[:500]}")
             
             return False
         except Exception as e:
@@ -141,8 +218,7 @@ class APIClient:
             mime_type = mime_types.get(file_ext, 'image/jpeg')
             
             # API endpoint for image uploads
-            endpoint = '/api/v1/images'
-            url = f"{self.base_url}{endpoint}"
+            url = self.build_url('/images')
             
             files = {'file': (filename, response.content, mime_type)}
             

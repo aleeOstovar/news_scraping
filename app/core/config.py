@@ -85,9 +85,9 @@ NEWS_SOURCES = {
 }
 
 # Legacy global variables (kept for backward compatibility)
-API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:3000")
+API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:3000/api/v1")
 API_KEY = os.getenv("API_KEY", "fm_d1df97a159b1a94bce1aa98cea350e3ce48d28561695a60a")
-SCHEDULER_INTERVAL_HOURS = int(os.getenv("SCHEDULER_INTERVAL_HOURS", "2"))
+SCHEDULER_INTERVAL_HOURS = int(os.getenv("SCHEDULER_INTERVAL_HOURS", "24"))
 ARTICLE_DELAY_SECONDS = int(os.getenv("ARTICLE_DELAY_SECONDS", "20"))
 USER_AGENT = os.getenv("USER_AGENT", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")

@@ -1,7 +1,7 @@
 import logging
 import re
 from typing import List, Dict, Optional, Any, Tuple
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from bs4 import BeautifulSoup
 from persiantools.jdatetime import JalaliDateTime
@@ -45,13 +45,23 @@ class MihanBlockchainScraper(BaseScraper):
             return result
             
         # Get current time for age comparison
-        current_time = datetime.now(datetime.timezone.utc)
+        current_time = datetime.now(timezone.utc)
         
         # Select the articles using CSS selectors
         articles = soup.select('div.jnews_category_content_wrapper > div.jeg_postblock_4.jeg_postblock > div.jeg_posts.jeg_block_container > div.jeg_posts > article.jeg_post')
         
+        # Maximum number of articles to return (limit to 10)
+        max_articles = 10
+        
+        logger.info(f"Found {len(articles)} total articles on the page, will collect max {max_articles}")
+        
         # Extract the link and date for each article
         for article in articles:
+            # Stop if we've reached the maximum number of articles
+            if len(result) >= max_articles:
+                logger.info(f"Reached the maximum of {max_articles} articles, stopping collection")
+                break
+                
             try:
                 # Extract the link
                 link_element = article.select_one('div.jeg_postblock_content > div.jeg_post_meta > div.jeg_meta_date > a')
@@ -95,7 +105,7 @@ class MihanBlockchainScraper(BaseScraper):
                     utc_datetime = gregorian_datetime.replace(tzinfo=None)
         
                     # Get the date difference
-                    time_diff = current_time - utc_datetime.replace(tzinfo=datetime.timezone.utc)
+                    time_diff = current_time - utc_datetime.replace(tzinfo=timezone.utc)
         
                     # Only add if within max age
                     if time_diff <= timedelta(days=self.max_age_days):
@@ -113,8 +123,13 @@ class MihanBlockchainScraper(BaseScraper):
                     
             except Exception as e:
                 logger.error(f"Error processing article: {e}")
+        
+        # HARD LIMIT: Ensure we never return more than max_articles
+        if len(result) > max_articles:
+            result = result[:max_articles]
+            logger.info(f"Hard limiting result to {max_articles} articles")
                 
-        logger.info(f"Found {len(result)} articles within the last {self.max_age_days} days")
+        logger.info(f"Found {len(result)} articles within the last {self.max_age_days} days (limited to {max_articles} max)")
         return result
         
     def get_article_content(self, url: str, date: str) -> Optional[ArticleContentModel]:
@@ -182,43 +197,81 @@ class MihanBlockchainScraper(BaseScraper):
                 
             # Extract thumbnail image
             thumbnail_image = self.extract_thumbnail_image(html_content)
+            logger.info(f"Extracted thumbnail image: {thumbnail_image}")
             
             # Extract and process images
             processed_html, images_url = self.extract_and_replace_images(html_content)
+            logger.info(f"Extracted {len(images_url)} images from article: {article.link}")
             
             # Extract content
             content_list = self.extract_content(processed_html)
+            logger.info(f"Extracted {len(content_list)} content paragraphs from article: {article.link}")
+            
+            # Make sure content is not empty
+            if not content_list or len(content_list) == 0:
+                logger.error(f"No content extracted from article: {article.link}")
+                
+                # Create a minimal content list with article title
+                content_list = [f"Article from {self.source_name}: {article.title}"]
             
             # Extract tags
             tags = self.extract_tags(html_content)
+            logger.info(f"Extracted {len(tags)} tags from article: {article.link}")
             
             # Upload thumbnail image if found
             if thumbnail_image:
-                thumbnail_image = self.api_client.upload_image(thumbnail_image)
+                try:
+                    thumbnail_image = self.api_client.upload_image(thumbnail_image)
+                    logger.info(f"Uploaded thumbnail image: {thumbnail_image}")
+                except Exception as e:
+                    logger.error(f"Failed to upload thumbnail image: {e}")
+                    # Use the first content image as fallback thumbnail
+                    if images_url:
+                        thumbnail_image = images_url[0].url
+                        logger.info(f"Using first content image as thumbnail: {thumbnail_image}")
             elif images_url:
                 # Use the first image as thumbnail if no dedicated thumbnail is found
                 thumbnail_image = images_url[0].url
-                
+                logger.info(f"Using first content image as thumbnail: {thumbnail_image}")
+            
             # Upload content images
-            for image in images_url:
+            for i, image in enumerate(images_url):
                 original_url = image.url
-                new_url = self.api_client.upload_image(original_url)
-                image.url = new_url
-                
-            # Create and return the full article model
-            return ArticleFullModel(
+                try:
+                    new_url = self.api_client.upload_image(original_url)
+                    image.url = new_url
+                    logger.info(f"Uploaded image {i+1}/{len(images_url)}: {new_url}")
+                except Exception as e:
+                    logger.error(f"Failed to upload image {i+1}/{len(images_url)} ({original_url}): {e}")
+                    # Keep the original URL if upload fails
+            
+            # Ensure creator field is not empty
+            creator = article.creator
+            if not creator or creator == "N/A":
+                creator = self.source_name
+            
+            # Create the full article model
+            article_model = ArticleFullModel(
                 title=article.title,
                 sourceUrl=article.link,
                 sourceDate=article.date,
-                creator=article.creator,
+                creator=creator,
                 thumbnailImage=thumbnail_image,
                 content=content_list,
                 imagesUrl=images_url,
-                tags=tags
+                tags=tags,
+                status="draft"  # Set status to draft
             )
+            
+            # Log the model structure for debugging
+            logger.info(f"Created article model: title={article_model.title}, content length={len(article_model.content)}, images={len(article_model.imagesUrl)}, tags={len(article_model.tags)}")
+            
+            return article_model
             
         except Exception as e:
             logger.error(f"Error processing article content for {article.link}: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return None
             
     # Helper methods for processing content

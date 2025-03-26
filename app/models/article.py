@@ -32,6 +32,7 @@ class ArticleFullModel(BaseModel):
     content: List[str]
     imagesUrl: List[ImageModel]
     tags: List[str] = Field(default_factory=list)
+    status: str = "draft"  # Default status is draft
 
 class ArticleCheckModel(BaseModel):
     """Model for checking if an article exists."""
