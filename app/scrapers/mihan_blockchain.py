@@ -18,7 +18,7 @@ class MihanBlockchainScraper(BaseScraper):
     Scraper for MihanBlockchain news website.
     """
     
-    def __init__(self, max_age_days: int = 8):
+    def __init__(self, max_age_days: int = 3):
         """
         Initialize the MihanBlockchain scraper.
         
@@ -50,18 +50,11 @@ class MihanBlockchainScraper(BaseScraper):
         # Select the articles using CSS selectors
         articles = soup.select('div.jnews_category_content_wrapper > div.jeg_postblock_4.jeg_postblock > div.jeg_posts.jeg_block_container > div.jeg_posts > article.jeg_post')
         
-        # Maximum number of articles to return (limit to 10)
-        max_articles = 10
-        
-        logger.info(f"Found {len(articles)} total articles on the page, will collect max {max_articles}")
+        # No maximum limit - retrieve all articles from the past 3 days
+        logger.info(f"Found {len(articles)} total articles on the page, will collect all within the past 3 days")
         
         # Extract the link and date for each article
         for article in articles:
-            # Stop if we've reached the maximum number of articles
-            if len(result) >= max_articles:
-                logger.info(f"Reached the maximum of {max_articles} articles, stopping collection")
-                break
-                
             try:
                 # Extract the link
                 link_element = article.select_one('div.jeg_postblock_content > div.jeg_post_meta > div.jeg_meta_date > a')
@@ -107,8 +100,9 @@ class MihanBlockchainScraper(BaseScraper):
                     # Get the date difference
                     time_diff = current_time - utc_datetime.replace(tzinfo=timezone.utc)
         
-                    # Only add if within max age
-                    if time_diff <= timedelta(days=self.max_age_days):
+                    # Only add if within 3 days (can be modified by max_age_days parameter)
+                    max_days = min(self.max_age_days, 3)  # Use either max_age_days or 3, whichever is smaller
+                    if time_diff <= timedelta(days=max_days):
                         # Format the datetime into a string
                         formatted_date = utc_datetime.strftime('%Y-%m-%d')
         
@@ -124,12 +118,12 @@ class MihanBlockchainScraper(BaseScraper):
             except Exception as e:
                 logger.error(f"Error processing article: {e}")
         
-        # HARD LIMIT: Ensure we never return more than max_articles
-        if len(result) > max_articles:
-            result = result[:max_articles]
-            logger.info(f"Hard limiting result to {max_articles} articles")
-                
-        logger.info(f"Found {len(result)} articles within the last {self.max_age_days} days (limited to {max_articles} max)")
+        logger.info(f"Found {len(result)} articles within the last {min(self.max_age_days, 3)} days")
+        
+        # Sort articles from oldest to newest for processing
+        # This way the newest articles (which come first in the list) will be processed last
+        result.sort(key=lambda x: x.date)
+        
         return result
         
     def get_article_content(self, url: str, date: str) -> Optional[ArticleContentModel]:
@@ -194,305 +188,330 @@ class MihanBlockchainScraper(BaseScraper):
             if not html_content or html_content == "N/A":
                 logger.error(f"No HTML content found for article: {article.link}")
                 return None
-                
+            
+            # Check for placeholders before processing (should be none)
+            placeholder_count_before = len(re.findall(r'\*\*IMAGE_PLACEHOLDER_image\d+\*\*', html_content))
+            logger.info(f"Before processing: found {placeholder_count_before} placeholders in original HTML")
+            
             # Extract thumbnail image
             thumbnail_image = self.extract_thumbnail_image(html_content)
             logger.info(f"Extracted thumbnail image: {thumbnail_image}")
             
             # Extract and process images
-            processed_html, images_url = self.extract_and_replace_images(html_content)
-            logger.info(f"Extracted {len(images_url)} images from article: {article.link}")
+            html_with_placeholders, images = self.extract_and_replace_images(html_content)
+            
+            # Check for placeholders after processing
+            placeholder_count_after = len(re.findall(r'\*\*IMAGE_PLACEHOLDER_image\d+\*\*', html_with_placeholders))
+            logger.info(f"After processing: found {placeholder_count_after} placeholders in modified HTML")
             
             # Extract content
-            content_list = self.extract_content(processed_html)
-            logger.info(f"Extracted {len(content_list)} content paragraphs from article: {article.link}")
+            content = self.extract_content(html_with_placeholders)
             
-            # Make sure content is not empty
-            if not content_list or len(content_list) == 0:
-                logger.error(f"No content extracted from article: {article.link}")
-                
-                # Create a minimal content list with article title
-                content_list = [f"Article from {self.source_name}: {article.title}"]
+            # Use the title from the article model
+            title = article.title
             
             # Extract tags
             tags = self.extract_tags(html_content)
-            logger.info(f"Extracted {len(tags)} tags from article: {article.link}")
             
-            # Upload thumbnail image if found
-            if thumbnail_image:
-                try:
-                    thumbnail_image = self.api_client.upload_image(thumbnail_image)
-                    logger.info(f"Uploaded thumbnail image: {thumbnail_image}")
-                except Exception as e:
-                    logger.error(f"Failed to upload thumbnail image: {e}")
-                    # Use the first content image as fallback thumbnail
-                    if images_url:
-                        thumbnail_image = images_url[0].url
-                        logger.info(f"Using first content image as thumbnail: {thumbnail_image}")
-            elif images_url:
-                # Use the first image as thumbnail if no dedicated thumbnail is found
-                thumbnail_image = images_url[0].url
-                logger.info(f"Using first content image as thumbnail: {thumbnail_image}")
+            # Get image URLs
+            image_urls = [img.url for img in images]
             
-            # Upload content images
-            for i, image in enumerate(images_url):
-                original_url = image.url
-                try:
-                    new_url = self.api_client.upload_image(original_url)
-                    image.url = new_url
-                    logger.info(f"Uploaded image {i+1}/{len(images_url)}: {new_url}")
-                except Exception as e:
-                    logger.error(f"Failed to upload image {i+1}/{len(images_url)} ({original_url}): {e}")
-                    # Keep the original URL if upload fails
-            
-            # Ensure creator field is not empty
-            creator = article.creator
-            if not creator or creator == "N/A":
-                creator = self.source_name
-            
-            # Create the full article model
-            article_model = ArticleFullModel(
-                title=article.title,
+            # Add thumbnail if present and not already in images
+            if thumbnail_image and thumbnail_image not in image_urls:
+                image_urls.insert(0, thumbnail_image)
+                
+            # Create article data
+            article_data = ArticleFullModel(
+                title=title,
+                source="MihanBlockchain",
                 sourceUrl=article.link,
-                sourceDate=article.date,
-                creator=creator,
-                thumbnailImage=thumbnail_image,
-                content=content_list,
-                imagesUrl=images_url,
+                publishDate=article.date,
+                creator=article.creator,
+                content=content,
                 tags=tags,
-                status="draft"  # Set status to draft
+                imagesUrl=image_urls
             )
             
-            # Log the model structure for debugging
-            logger.info(f"Created article model: title={article_model.title}, content length={len(article_model.content)}, images={len(article_model.imagesUrl)}, tags={len(article_model.tags)}")
-            
-            return article_model
-            
+            return article_data
+                
         except Exception as e:
             logger.error(f"Error processing article content for {article.link}: {e}")
-            import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
             return None
             
-    # Helper methods for processing content
-    
     def extract_thumbnail_image(self, html: str) -> Optional[str]:
-        """Extract the thumbnail image URL from the HTML content."""
-        try:
-            # Try different patterns to find the thumbnail
-            patterns = [
-                r'<div[^>]*class="[^"]*jeg_featured[^"]*"[^>]*>.*?<a[^>]*>.*?<div[^>]*class="[^"]*thumbnail-container[^"]*"[^>]*>.*?<img[^>]*data-lazy-src="([^"]+)"',
-                r'<div[^>]*class="[^"]*jeg_featured[^"]*"[^>]*>.*?<a[^>]*>.*?<div[^>]*class="[^"]*thumbnail-container[^"]*"[^>]*>.*?<img[^>]*data-src="([^"]+)"',
-                r'<div[^>]*class="[^"]*jeg_featured[^"]*"[^>]*>.*?<a[^>]*>.*?<div[^>]*class="[^"]*thumbnail-container[^"]*"[^>]*>.*?<img[^>]*data-lazy-srcset="([^"]+)"',
-                r'<div[^>]*class="[^"]*jeg_featured[^"]*"[^>]*>.*?<a[^>]*>.*?<div[^>]*class="[^"]*thumbnail-container[^"]*"[^>]*>.*?<img[^>]*src="([^"]+)"'
-            ]
+        """
+        Extract the thumbnail image from the article HTML.
+        
+        Args:
+            html: HTML content of the article
             
-            for pattern in patterns:
-                match = re.search(pattern, html, re.DOTALL)
-                if match:
-                    url = match.group(1)
-                    
-                    # If it's a srcset, extract the first URL
-                    if ',' in url:
-                        url = url.split(',')[0].strip().split(' ')[0]
-                        
-                    # Skip data URLs
-                    if url.startswith('data:'):
-                        continue
-                        
-                    return url
-                    
-            return None
+        Returns:
+            URL of the thumbnail image, or None if not found
+        """
+        soup = BeautifulSoup(html, 'html.parser')
+        
+        # Look for the thumbnail image
+        try:
+            # First try to find the featured image
+            featured_img = soup.select_one('div.jeg_featured')
+            if featured_img:
+                img_tag = featured_img.select_one('img')
+                if img_tag and 'src' in img_tag.attrs:
+                    return img_tag['src']
+            
+            # If not found, try to find any image in the article
+            article_img = soup.select_one('img')
+            if article_img and 'src' in article_img.attrs:
+                return article_img['src']
+                
         except Exception as e:
             logger.error(f"Error extracting thumbnail image: {e}")
-            return None
             
+        return None
+        
     def extract_and_replace_images(self, html: str) -> Tuple[str, List[ImageModel]]:
-        """Extract images from the HTML content and replace them with placeholders."""
-        processed_html = html
-        images_url = []
-        processed_urls = set()
-        image_counter = 0
+        """
+        Extract images from the article HTML and replace them with placeholders.
         
-        # Define patterns for finding images
-        patterns = [
-            # Figure with src attribute
-            (r'<figure[^>]*>[\s\S]*?<a[^>]*>[\s\S]*?<img[^>]*?src="([^"]+)"[\s\S]*?</a>[\s\S]*?(?:<figcaption[^>]*>([\s\S]*?)</figcaption>)?[\s\S]*?</figure>', 'figure'),
+        Args:
+            html: HTML content of the article
             
-            # Figure with data-lazy-src attribute
-            (r'<figure[^>]*>[\s\S]*?<a[^>]*>[\s\S]*?<img[^>]*?(?:data-lazy-src="([^"]+)")[\s\S]*?</a>[\s\S]*?(?:<figcaption[^>]*>([\s\S]*?)</figcaption>)?[\s\S]*?</figure>', 'figure'),
+        Returns:
+            Tuple containing the HTML with placeholders and list of image models
+        """
+        soup = BeautifulSoup(html, 'html.parser')
+        images = []
+        
+        # Find all image elements in the content
+        try:
+            # Replace each image with a placeholder
+            for i, img in enumerate(soup.select('img')):
+                if 'src' in img.attrs:
+                    # Create an image model
+                    image_model = ImageModel(
+                        id=f"image{i+1}",
+                        url=img['src'],
+                        caption=img.get('alt', '') or img.get('title', '')
+                    )
+                    
+                    # Replace the image with a placeholder in the HTML
+                    placeholder_text = f"**IMAGE_PLACEHOLDER_image{i+1}**"
+                    placeholder_tag = soup.new_tag('p')
+                    placeholder_tag.string = placeholder_text
+                    img.replace_with(placeholder_tag)
+                    
+                    # Add to the list of images
+                    images.append(image_model)
+                    
+            # Return the modified HTML and images
+            return str(soup), images
             
-            # Div with figure, using various src attributes
-            (r'<div[^>]*class="[^"]*wp-block-image[^"]*"[^>]*>\s*<figure[^>]*>\s*<a[^>]*>\s*<img[^>]*?(?:data-lazy-src="([^"]+)"|data-src="([^"]+)"|src="([^"]+)").*?</a>(?:\s*<figcaption[^>]*>([\s\S]*?)</figcaption>)?[\s\S]*?</figure>', 'figure'),
+        except Exception as e:
+            logger.error(f"Error extracting images: {e}")
+            return html, images
+
+    def extract_content(self, html: str) -> List[str]:
+        """
+        Extract content paragraphs from the article HTML.
+        
+        Args:
+            html: HTML content with image placeholders
             
-            # Standalone img elements
-            (r'<div[^>]*class="[^"]*wp-block-image[^"]*"[^>]*>\s*<img[^>]*?(?:data-lazy-src="([^"]+)"|data-src="([^"]+)"|src="([^"]+)").*?>(?:\s*<figcaption[^>]*>([\s\S]*?)</figcaption>)?', 'image')
-        ]
+        Returns:
+            List of content paragraphs
+        """
+        soup = BeautifulSoup(html, 'html.parser')
+        content_elements = []
         
-        # Define excluded containers (areas to skip)
-        excluded_containers = [
-            "jeg_share_bottom_container",
-            "jeg_ad_jeg_article_jnews_content_bottom_ads",
-            "jnews_prev_next_container",
-            "jnews_author_box_container",
-            "jnews_related_post_container",
-            "jeg_postblock_22 jeg_postblock jeg_module_hook jeg_pagination_disable jeg_col_2o3 jnews_module_307974_0_67c8441ee8156",
-            "jnews_popup_post_container",
-            "jnews_comment_container"
-        ]
+        # Select the content container
+        content_container = soup.select_one('div.content-inner')
         
-        # Helper function to check if an element is in an excluded container
-        def is_in_excluded_container(html: str, element_position: int) -> bool:
-            sample_text = html[element_position:element_position + 100]
-            for container in excluded_containers:
-                pattern = rf'<div[^>]*class="[^"]*{container}[^"]*"[^>]*>[\\s\\S]*?{re.escape(sample_text)}'
-                if re.search(pattern, html, re.IGNORECASE):
-                    return True
-            return False
+        # If the specific container isn't found, use the full HTML
+        if not content_container:
+            content_container = soup
         
-        # Process each pattern
-        for pattern, img_type in patterns:
-            for match in re.finditer(pattern, html, re.IGNORECASE):
-                full_match = match.group(0)
-                match_position = match.start()
-                
-                # Extract the image URL based on pattern
-                if img_type == 'figure':
-                    # First pattern - only one capture group for URL
-                    if pattern.startswith('<figure') and 'data-lazy-src' not in pattern:
-                        image_url = match.group(1)
-                        caption = match.group(2)
-                    # Second pattern - data-lazy-src pattern
-                    elif pattern.startswith('<figure') and 'data-lazy-src' in pattern:
-                        image_url = match.group(1)
-                        caption = match.group(2)
-                    # Third pattern - multiple possible src attributes
-                    else:
-                        image_url = match.group(1) or match.group(2) or match.group(3)
-                        caption = match.group(4)
-                else:  # img_type == 'image'
-                    image_url = match.group(1) or match.group(2) or match.group(3)
-                    caption = match.group(4) if len(match.groups()) >= 4 else None
-                
-                # Skip if URL is empty or element is in excluded container
-                if not image_url or is_in_excluded_container(html, match_position) or image_url in processed_urls:
+        # Extract all paragraph elements, headings, and placeholders
+        try:
+            elements = content_container.select('p, h1, h2, h3, h4, h5, h6, blockquote, ul, ol')
+            
+            # These classes indicate elements that should be excluded
+            excluded_classes = [
+                'jeg_post_meta',
+                'jeg_share_button',
+                'jeg_meta_container',
+                'jeg_bottombar',
+                'jeg_header',
+                'jeg_footer',
+                'jeg_ad',
+                'jeg_authorbox'
+            ]
+            
+            for element in elements:
+                # Skip empty paragraphs
+                if not element.text.strip() and "**IMAGE_PLACEHOLDER_" not in element.text:
                     continue
                 
-                # Skip data URLs
-                if image_url.startswith('data:'):
-                    # Try to find data-lazy-srcset
-                    srcset_match = re.search(r'data-lazy-srcset="([^"]+)"', full_match)
-                    if srcset_match:
-                        srcset = srcset_match.group(1)
-                        image_url = srcset.split(',')[0].strip().split(' ')[0]
-                    else:
-                        continue
+                # Skip elements with excluded classes
+                if any(excluded_class in element.get('class', []) for excluded_class in excluded_classes):
+                    continue
+                    
+                # Check if the element is a parent of excluded elements
+                if element.select_one(', '.join(f'.{cls}' for cls in excluded_classes)):
+                    continue
                 
-                # Clean up caption if present
-                if caption:
-                    caption = re.sub(r'<[^>]+>', '', caption).strip()
+                # Check if element is in an excluded container - commenting out as is_in_excluded_container is not used
+                # element_position = html.find(str(element))
+                # if element_position != -1 and self.is_in_excluded_container(html, element_position):
+                #     continue
                 
-                # Create a unique ID and placeholder
-                image_id = f'image{image_counter}'
-                placeholder = f'**image_{image_id}**'
+                # Extract text content
+                text = element.get_text(strip=True)
                 
-                # Add image info to the list
-                images_url.append(ImageModel(
-                    id=image_id,
-                    url=image_url,
-                    caption=caption,
-                    type=img_type
-                ))
+                # Special handling for image placeholders
+                if element.name == 'p' and "**IMAGE_PLACEHOLDER_" in element.text:
+                    text = element.text.strip()
                 
-                # Replace the original HTML with the placeholder
-                processed_html = processed_html.replace(full_match, placeholder)
-                processed_urls.add(image_url)
-                image_counter += 1
-        
-        # Remove unwanted content
-        patterns_to_remove = [
-            r'<div[^>]*class="[^"]*jeg_post_source[^"]*"[^>]*>[\s\S]*?</div>',
-            r'<div[^>]*class="[^"]*jeg_post_tags[^"]*"[^>]*>[\s\S]*?</div>'
-        ]
-        
-        for pattern in patterns_to_remove:
-            processed_html = re.sub(pattern, '', processed_html)
-        
-        # Replace content of ez-toc-title with empty text but keep structure
-        ez_toc_pattern = r'(<div[^>]*class="[^"]*ez-toc-title-container[^"]*"[^>]*>[\s\S]*?<p[^>]*class="[^"]*ez-toc-title[^"]*"[^>]*>)([\s\S]*?)(</p>[\s\S]*?</div>)'
-        processed_html = re.sub(ez_toc_pattern, r'\1\3', processed_html)
-        
-        return processed_html, images_url
-    
-    def extract_content(self, html: str) -> List[str]:
-        """Extract structured content from the processed HTML."""
-        content_array = []
-        
-        try:
-            # Find the main content div
-            content_div_pattern = r'<div[^>]*class="[^"]*content-inner[^"]*"[^>]*>([\s\S]*?)<div[^>]*class="[^"]*jeg_share_bottom_container'
-            content_div_match = re.search(content_div_pattern, html, re.IGNORECASE)
+                # Add to content if not empty
+                if text:
+                    content_elements.append(text)
             
-            if not content_div_match:
-                # Try a more relaxed pattern
-                content_div_pattern = r'<div[^>]*class="[^"]*content-inner[^"]*"[^>]*>([\s\S]*)'
-                content_div_match = re.search(content_div_pattern, html, re.IGNORECASE)
-                
-                if not content_div_match:
-                    logger.warning("Could not find content div")
-                    return []
+            # Special processing for image placeholders in paragraphs
+            for i, content in enumerate(content_elements):
+                if "**IMAGE_PLACEHOLDER_" in content:
+                    # Extract just the placeholder part
+                    match = re.search(r'(\*\*IMAGE_PLACEHOLDER_image\d+\*\*)', content)
+                    if match:
+                        placeholder = match.group(1)
+                        # Replace the content with just the placeholder
+                        content_elements[i] = placeholder
             
-            content_html = content_div_match.group(1)
+            # Remove duplicates while preserving order
+            unique_elements = []
+            seen = set()
+            for element in content_elements:
+                if element not in seen:
+                    unique_elements.append(element)
+                    seen.add(element)
+                    
+            return unique_elements
             
-            # Create a pattern that matches paragraphs, headings, blockquotes, and placeholders
-            combined_pattern = r'(<p[^>]*>[\s\S]*?</p>|<blockquote[^>]*>[\s\S]*?</blockquote>|<h[1-6][^>]*>[\s\S]*?</h[1-6]>|\*\*image_image\d+\*\*)'
-            
-            # Find all matches
-            for match in re.finditer(combined_pattern, content_html, re.IGNORECASE):
-                content = match.group(1).strip()
-                
-                # If it's a placeholder, add it directly
-                if content.startswith('**image_'):
-                    content_array.append(content)
-                else:
-                    # For HTML content, strip tags and add if non-empty
-                    text_content = re.sub(r'<[^>]+>', '', content).strip()
-                    if text_content:
-                        content_array.append(text_content)
-            
-            return content_array
         except Exception as e:
             logger.error(f"Error extracting content: {e}")
-            return []
-    
+            return ["Content extraction failed"]
+            
     def extract_tags(self, html: str) -> List[str]:
-        """Extract tags from the HTML content."""
+        """
+        Extract tags from the article HTML.
+        
+        Args:
+            html: HTML content of the article
+            
+        Returns:
+            List of tags
+        """
+        soup = BeautifulSoup(html, 'html.parser')
         tags = []
         
         try:
-            # Try different patterns to find tags
-            patterns = [
-                r'<div[^>]*class="[^"]*inner-content[^"]*"[^>]*>.*?<div[^>]*class="[^"]*jeg_post_tags[^"]*"[^>]*>([\s\S]*?)</div>',
-                r'<div[^>]*class="[^"]*jeg_post_tags[^"]*"[^>]*>([\s\S]*?)</div>'
-            ]
-            
-            tag_section = None
-            for pattern in patterns:
-                match = re.search(pattern, html, re.DOTALL)
-                if match:
-                    tag_section = match.group(1)
-                    break
-            
-            if tag_section:
-                # Extract individual tags
-                for tag_match in re.finditer(r'<a[^>]*>([\s\S]*?)</a>', tag_section, re.IGNORECASE):
-                    tag_text = tag_match.group(1).strip()
-                    # Remove HTML tags and skip empty/label tags
-                    tag_text = re.sub(r'<[^>]+>', '', tag_text).strip()
-                    if tag_text and not tag_text.lower() == 'تگ:':
+            # Look for tags container
+            tag_container = soup.select_one('div.jeg_post_tags')
+            if tag_container:
+                # Extract all tag links
+                tag_links = tag_container.select('a')
+                for tag_link in tag_links:
+                    tag_text = tag_link.get_text(strip=True)
+                    if tag_text and tag_text not in tags:
                         tags.append(tag_text)
-            
+                        
+            # Limit to a maximum of 10 tags
+            if len(tags) > 10:
+                tags = tags[:10]
+                
             return tags
+            
         except Exception as e:
             logger.error(f"Error extracting tags: {e}")
-            return [] 
+            return []
+    
+    # The following functions appear to be unused in the actual scraping process and can be commented out
+
+    # def is_in_excluded_container(self, html: str, element_position: int) -> bool:
+    #     """
+    #     Check if the element position is within an excluded container.
+    #     
+    #     Args:
+    #         html: HTML content of the article
+    #         element_position: Position of the element in the HTML
+    #         
+    #     Returns:
+    #         True if in excluded container, False otherwise
+    #     """
+    #     # Get a sample of the text around the match for context
+    #     start_pos = max(0, element_position - 500)
+    #     end_pos = min(len(html), element_position + 500)
+    #     context = html[start_pos:end_pos]
+    #     
+    #     # Check if the element is within any excluded containers
+    #     excluded_container_patterns = [
+    #         r'<div\s+class="jeg_post_meta">.*?</div>',  # Metadata section
+    #         r'<div\s+class="jeg_share_button">.*?</div>',  # Share buttons
+    #         r'<div\s+class="jeg_authorbox">.*?</div>',  # Author information
+    #         r'<div\s+class="jeg_navigation\s+jeg_pagination">.*?</div>',  # Pagination
+    #         r'<div\s+class="jeg_bottombar">.*?</div>',  # Bottom bar
+    #         r'<footer\s+class="jeg_footer">.*?</footer>',  # Footer
+    #         r'<header\s+class="jeg_header">.*?</header>',  # Header
+    #         r'<div\s+class="jeg_ad">.*?</div>',  # Advertisements
+    #         r'<div\s+class="jeg_meta_container">.*?</div>'  # Metadata container
+    #     ]
+    #     
+    #     # Check if the element is within any of the excluded containers
+    #     for pattern in excluded_container_patterns:
+    #         # Find all matches of the pattern in the context
+    #         matches = re.finditer(pattern, context, re.DOTALL)
+    #         for match in matches:
+    #             # Calculate global position of the match in the original HTML
+    #             global_start = start_pos + match.start()
+    #             global_end = start_pos + match.end()
+    #             
+    #             # Check if the element position is within this match
+    #             if global_start <= element_position <= global_end:
+    #                 return True
+    #                 
+    #     return False
+
+    # def scrape_articles(self, base_url: str) -> List[ArticleFullModel]:
+    #     """
+    #     Scrape articles from MihanBlockchain website.
+    #     
+    #     Args:
+    #         base_url: Base URL of the website
+    #         
+    #     Returns:
+    #         List of processed articles
+    #     """
+    #     articles = []
+    #     
+    #     # Get article links
+    #     article_links = self.get_article_links(base_url)
+    #     logger.info(f"Found {len(article_links)} article links")
+    #     
+    #     # Process each article
+    #     for i, article_link in enumerate(article_links):
+    #         logger.info(f"Processing article {i+1}/{len(article_links)}: {article_link.link}")
+    #         
+    #         # Get article content
+    #         content = self.get_article_content(article_link.link, article_link.date)
+    #         if not content:
+    #             logger.warning(f"Failed to get content for article: {article_link.link}")
+    #             continue
+    #             
+    #         # Process article content
+    #         processed = self.process_article_content(content)
+    #         if not processed:
+    #             logger.warning(f"Failed to process content for article: {article_link.link}")
+    #             continue
+    #             
+    #         # Add to list of articles
+    #         articles.append(processed)
+    #         
+    #     return articles 

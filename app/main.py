@@ -41,8 +41,8 @@ async def startup_event():
     """Initialize services when the application starts."""
     logger.info("Starting up application...")
     
-    # Initialize the scraper controller
-    scraper_controller._initialize_scrapers()
+    # Initialize the scraper controller - this line is redundant as controller is already initialized
+    # scraper_controller._initialize_scrapers()
     
     # Start the scheduler if auto-start is enabled
     if settings.SCHEDULER_AUTO_START:

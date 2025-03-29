@@ -28,6 +28,9 @@ class ScraperController:
         # Initialize scrapers for enabled news sources
         self._initialize_scrapers()
         
+        # The _processed_urls field is unused, can be removed
+        # self._processed_urls = set()
+        
     def _initialize_scrapers(self):
         """Initialize scrapers for all enabled news sources."""
         # Initialize MihanBlockchain scraper if enabled

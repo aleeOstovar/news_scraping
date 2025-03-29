@@ -22,9 +22,9 @@ print("Creating ScraperController instance...")
 controller = ScraperController()
 print(f"Initialized ScraperController with {len(controller.scrapers)} scrapers")
 
-# Check the processed URLs loaded
-print(f"Number of processed URLs loaded: {len(controller._processed_urls)}")
-print(f"First 5 processed URLs (if any): {list(controller._processed_urls)[:5] if controller._processed_urls else []}")
+# Check the processed URLs loaded - this appears to be debug code only, can be commented out
+# print(f"Number of processed URLs loaded: {len(controller._processed_urls)}")
+# print(f"First 5 processed URLs (if any): {list(controller._processed_urls)[:5] if controller._processed_urls else []}")
 
 # Run the scraper
 print("\nRunning mihan_blockchain scraper...")

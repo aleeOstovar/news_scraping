@@ -8,7 +8,8 @@ from datetime import datetime, timedelta
 import requests
 from bs4 import BeautifulSoup
 
-from app.core.config import USER_AGENT, ARTICLE_DELAY_SECONDS
+# We've commented out the usage of ARTICLE_DELAY_SECONDS, so we can comment out the import as well
+from app.core.config import USER_AGENT # , ARTICLE_DELAY_SECONDS
 from app.models.article import ArticleLinkModel, ArticleContentModel, ArticleFullModel
 from app.services.api_client import APIClient
 
@@ -248,38 +249,32 @@ class BaseScraper(ABC):
                     continue
                     
                 # Ensure imagesUrl is a list
-                if processed_dict.get('imagesUrl') is None:
+                if 'imagesUrl' in processed_dict and not isinstance(processed_dict['imagesUrl'], list):
                     processed_dict['imagesUrl'] = []
                 
-                # Add processing timestamp
-                processed_dict['processed_at'] = datetime.now().isoformat()
-                    
-                # Log successful article processing
-                logger.info(f"Successfully processed article: {processed_dict.get('title')} - Content paragraphs: {len(processed_dict.get('content', []))}, Images: {len(processed_dict.get('imagesUrl', []))}")
-                
-                # Add article to the results (don't send to API here - the controller will do it)
+                # Add to processed articles
                 processed_articles.append(processed_dict)
                 
                 # Log success
                 if hasattr(scraper_controller, "_scraping_logs"):
-                    log_message = f"Successfully processed article: {processed_dict.get('title')} ({url})"
+                    log_message = f"Successfully processed article: {url}"
                     scraper_controller._scraping_logs.append(f"[{datetime.now().isoformat()}] {log_message}")
+                
             except Exception as e:
-                logger.error(f"Error converting processed article to dict ({url}): {e}")
+                logger.error(f"Error processing article {url}: {e}")
                 
                 # Log failure
                 if hasattr(scraper_controller, "_scraping_logs"):
-                    log_message = f"Error preparing article for API: {e}"
+                    log_message = f"Error processing article {url}: {e}"
                     scraper_controller._scraping_logs.append(f"[{datetime.now().isoformat()}] {log_message}")
                 
                 continue
-            
-            # Add delay between articles
-            if i < len(article_links) - 1:
-                logger.info(f"Waiting {ARTICLE_DELAY_SECONDS} seconds before next article...")
-                time.sleep(ARTICLE_DELAY_SECONDS)
                 
-        # Update final progress
+            # Sleep briefly between articles to avoid overwhelming server
+            # Comment out the following line since it's not necessary with the current rate limits
+            # time.sleep(ARTICLE_DELAY_SECONDS)
+                
+        # Update progress - completed
         if hasattr(scraper_controller, "_scraping_progress") and self.source_name in scraper_controller._scraping_progress:
             scraper_controller._scraping_progress[self.source_name].update({
                 "progress": 100,
@@ -288,6 +283,6 @@ class BaseScraper(ABC):
                 "end_time": datetime.now().isoformat(),
                 "elapsed_time": str(datetime.now() - start_time).split('.')[0]  # Remove microseconds
             })
-        
+            
         logger.info(f"Scraper for {self.source_name} completed. Processed {len(processed_articles)} articles")
         return processed_articles 
