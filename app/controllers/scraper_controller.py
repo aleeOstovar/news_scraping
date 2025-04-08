@@ -3,10 +3,14 @@ import time
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 
-from app.core.config import get_settings, NEWS_SOURCES, SCHEDULER_INTERVAL_HOURS
+from app.core.config import settings
 from app.core.scheduler import scheduler
 from app.scrapers.mihan_blockchain import MihanBlockchainScraper
+from app.scrapers.base_scraper import BaseScraper
 from app.services.api_client import APIClient
+
+# Import new scraper
+from app.scrapers.arzdigital import ArzDigitalScraper
 
 logger = logging.getLogger(__name__)
 
@@ -21,20 +25,18 @@ class ScraperController:
     def __init__(self):
         """Initialize the scraper controller."""
         self.api_client = APIClient()
-        self.scrapers = {}
+        self.scrapers: Dict[str, BaseScraper] = {}
         self._scraping_progress = {}
         self._scraping_logs = []
+        self.is_scraping = False
         
         # Initialize scrapers for enabled news sources
         self._initialize_scrapers()
         
-        # The _processed_urls field is unused, can be removed
-        # self._processed_urls = set()
-        
     def _initialize_scrapers(self):
         """Initialize scrapers for all enabled news sources."""
         # Initialize MihanBlockchain scraper if enabled
-        if NEWS_SOURCES["mihan_blockchain"]["enabled"]:
+        if settings.NEWS_SOURCES["mihan_blockchain"]["enabled"]:
             # Initialize progress tracking
             self._scraping_progress["mihan_blockchain"] = {
                 "status": "idle",
@@ -44,14 +46,38 @@ class ScraperController:
             }
             
             # Initialize the scraper
-            self.scrapers["mihan_blockchain"] = MihanBlockchainScraper(
-                max_age_days=NEWS_SOURCES["mihan_blockchain"]["max_age_days"]
-            )
-            logger.info("Initialized MihanBlockchain scraper")
+            try:
+                self.scrapers["mihan_blockchain"] = MihanBlockchainScraper(
+                    api_client=self.api_client,
+                    max_age_days=settings.MAX_AGE_DAYS
+                )
+                logger.info("Initialized MihanBlockchain scraper")
+            except Exception as e:
+                logger.error(f"Failed to initialize MihanBlockchain scraper: {e}")
+        
+        # Initialize Arzdigital scraper if enabled
+        if settings.NEWS_SOURCES.get("arzdigital", {}).get("enabled", False):
+            # Initialize progress tracking
+            self._scraping_progress["arzdigital"] = {
+                "status": "idle",
+                "progress": 0,
+                "articles_found": 0,
+                "articles_processed": 0
+            }
             
+            # Initialize the scraper
+            try:
+                self.scrapers["arzdigital"] = ArzDigitalScraper(
+                    api_client=self.api_client,
+                    max_age_days=settings.MAX_AGE_DAYS
+                )
+                logger.info("Initialized Arzdigital scraper")
+            except Exception as e:
+                logger.error(f"Failed to initialize Arzdigital scraper: {e}")
+        
         # Add more scrapers for other news sources here
         
-        logger.info(f"Initialized {len(self.scrapers)} scrapers")
+        logger.info(f"Scrapers initialized: {list(self.scrapers.keys())}")
         
     def run_scraper(self, source_name: str) -> List[Dict[str, Any]]:
         """
@@ -68,7 +94,7 @@ class ScraperController:
             return []
             
         scraper = self.scrapers[source_name]
-        source_url = NEWS_SOURCES[source_name]["url"]
+        source_url = settings.NEWS_SOURCES[source_name]["url"]
         
         try:
             logger.info(f"Running scraper for {source_name}")
@@ -164,6 +190,15 @@ class ScraperController:
                     total_articles += len(articles)
                     
                 self._scraping_logs.append(f"[{datetime.now().isoformat()}] Completed scraper for {source_name}, found and saved {len(articles)} articles")
+                
+                # Update progress to show completed status with end_time
+                self._scraping_progress[source_name].update({
+                    "status": "completed",
+                    "progress": 100,
+                    "articles_processed": len(articles) if articles else 0,
+                    "end_time": datetime.now().isoformat()
+                })
+                
             except Exception as e:
                 logger.error(f"Error running scraper for {source_name}: {e}")
                 results[source_name] = []
@@ -171,12 +206,22 @@ class ScraperController:
                 self._scraping_logs.append(f"[{datetime.now().isoformat()}] Error running scraper for {source_name}: {e}")
                 
                 # Update progress to show error status
-                self._scraping_progress[source_name]["status"] = "error"
-                self._scraping_progress[source_name]["error"] = str(e)
+                self._scraping_progress[source_name].update({
+                    "status": "error",
+                    "progress": 0,
+                    "error": str(e),
+                    "end_time": datetime.now().isoformat()  # Also set end_time on error
+                })
         
         # Log summary of the entire run
         logger.info(f"Run completed for all scrapers. Total articles processed and saved: {total_articles}")
         self._scraping_logs.append(f"[{datetime.now().isoformat()}] All scrapers completed. Total articles processed and saved: {total_articles}")
+        
+        # Store last run timestamp for persistence between runs
+        self._last_scrape_results = {
+            "timestamp": datetime.now().isoformat(),
+            "total_articles": total_articles
+        }
         
         return results
     
@@ -187,14 +232,35 @@ class ScraperController:
         Args:
             start_now: Whether to run the scrapers immediately
         """
+        # Remove existing job if it exists
+        scheduler.remove_job("all_scrapers")
+        
         job_id = scheduler.add_interval_job(
             func=self.run_all_scrapers,
-            hours=SCHEDULER_INTERVAL_HOURS,
+            hours=settings.SCHEDULER_INTERVAL_HOURS,
             job_id="all_scrapers",
             start_now=start_now
         )
         
-        logger.info(f"Scheduled all scrapers to run every {SCHEDULER_INTERVAL_HOURS} hours (job_id: {job_id})")
+        logger.info(f"Scheduled all scrapers to run every {settings.SCHEDULER_INTERVAL_HOURS} hours (job_id: {job_id})")
+
+    def get_scraping_progress(self) -> Dict[str, Any]:
+        """
+        Get the current scraping progress.
+        
+        Returns:
+            Dictionary with scraping progress information
+        """
+        return self._scraping_progress
+        
+    def get_scraping_logs(self) -> List[str]:
+        """
+        Get the scraping logs.
+        
+        Returns:
+            List of log entries
+        """
+        return self._scraping_logs
 
 # Create a singleton instance
 scraper_controller = ScraperController() 

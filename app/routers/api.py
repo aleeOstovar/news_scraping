@@ -95,4 +95,20 @@ async def stop_scheduler_job(job_id: str):
     if success:
         return {"message": f"Job {job_id} stopped"}
     else:
-        raise HTTPException(status_code=404, detail=f"Job {job_id} not found") 
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+@router.post("/scrape/run-all")
+async def run_all_scrapers_endpoint():
+    """
+    Run all scrapers manually.
+    
+    Returns:
+        JSON response with a message indicating that the scrapers were started
+    """
+    # Run the scrapers in the foreground (not as a background task)
+    result = scraper_controller.run_all_scrapers()
+    
+    return {
+        "message": "All scrapers executed successfully",
+        "results": result
+    } 

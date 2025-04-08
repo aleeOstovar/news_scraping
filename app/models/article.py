@@ -21,6 +21,7 @@ class ArticleContentModel(BaseModel):
     data: str
     creator: str
     title: str
+    thumbnail_image: Optional[str] = None
     
 class ArticleFullModel(BaseModel):
     """Model for fully processed article data."""
@@ -29,7 +30,7 @@ class ArticleFullModel(BaseModel):
     sourceDate: str
     creator: str
     thumbnailImage: Optional[str] = None
-    content: List[str]
+    content: Dict[str, str]
     imagesUrl: List[ImageModel]
     tags: List[str] = Field(default_factory=list)
     status: str = "draft"  # Default status is draft

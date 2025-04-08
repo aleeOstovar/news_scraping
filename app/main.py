@@ -47,7 +47,7 @@ async def startup_event():
     # Start the scheduler if auto-start is enabled
     if settings.SCHEDULER_AUTO_START:
         logger.info("Auto-starting scheduler...")
-        scraper_controller.schedule_scrapers()
+        scraper_controller.schedule_scrapers(start_now=True)
 
 @app.on_event("shutdown")
 async def shutdown_event():

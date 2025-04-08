@@ -5,7 +5,7 @@ from typing import Dict, Any, Optional
 import requests
 from requests.exceptions import RequestException
 
-from app.core.config import API_BASE_URL, API_KEY
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -15,8 +15,8 @@ class APIClient:
     """
     def __init__(
         self, 
-        base_url: str = API_BASE_URL, 
-        api_key: Optional[str] = API_KEY, 
+        base_url: str = None, 
+        api_key: Optional[str] = None, 
         max_retries: int = 3
     ):
         """
@@ -27,13 +27,13 @@ class APIClient:
             api_key: API key if required
             max_retries: Maximum number of retry attempts for failed requests
         """
-        # Normalize the base URL to ensure it doesn't have trailing slashes
-        self.base_url = base_url.rstrip('/')
+        # Use provided values or defaults from settings
+        self.base_url = (base_url or settings.API_BASE_URL).rstrip('/')
         
         # Add logging to show the actual base URL being used
         logger.info(f"Using API base URL: {self.base_url}")
         
-        self.api_key = api_key
+        self.api_key = api_key or settings.API_KEY
         self.max_retries = max_retries
         self.session = requests.Session()
         
@@ -42,8 +42,8 @@ class APIClient:
             'Content-Type': 'application/json',
             'Accept': 'application/json'
         }
-        if api_key:
-            self.headers['x-api-key'] = api_key
+        if self.api_key:
+            self.headers['x-api-key'] = self.api_key
             
         logger.info(f"Initialized API client for {self.base_url}")
         
@@ -87,6 +87,25 @@ class APIClient:
             "tags_count": len(data.get('tags', [])) if isinstance(data.get('tags', []), list) else 'Not a list',
         }
         logger.info(f"Preparing to send article: {data_summary}")
+        
+        # Ensure imagesUrl is formatted correctly (as array of objects, not strings)
+        images_url = data.get('imagesUrl', [])
+        if isinstance(images_url, list) and len(images_url) > 0:
+            if isinstance(images_url[0], str):
+                # Convert string URLs to proper objects
+                logger.info("Converting imagesUrl from string array to object array")
+                data['imagesUrl'] = [
+                    {
+                        "id": f"img{idx}",
+                        "url": url,
+                        "caption": "",
+                        "type": "figure"
+                    } for idx, url in enumerate(images_url)
+                ]
+            elif hasattr(images_url[0], 'dict') and callable(getattr(images_url[0], 'dict', None)):
+                # Convert Pydantic models to dictionaries
+                logger.info("Converting imagesUrl from Pydantic models to dictionaries")
+                data['imagesUrl'] = [img.dict() for img in images_url]
         
         # Log the complete payload - this is very important for debugging
         logger.info(f"Complete article payload: {data}")

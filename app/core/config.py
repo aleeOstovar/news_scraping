@@ -8,7 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 env_path = Path(__file__).parent.parent.parent / '.env'
 load_dotenv(dotenv_path=env_path)
 
-# Persian month mapping (global for backward compatibility)
+# Persian month mapping
 PERSIAN_MONTHS = {
     'فروردین': 1,
     'اردیبهشت': 2,
@@ -30,20 +30,20 @@ class Settings(BaseSettings):
     API_KEY: str = os.getenv("API_KEY")
 
     # Scheduler Configuration
-    SCHEDULER_INTERVAL: int = int(os.getenv("SCHEDULER_INTERVAL", "3600"))
+    SCHEDULER_INTERVAL_HOURS: float = float(os.getenv("SCHEDULER_INTERVAL_HOURS", "2"))
     SCHEDULER_AUTO_START: bool = os.getenv("SCHEDULER_AUTO_START", "true").lower() == "true"
     SCHEDULER_TIMEZONE: str = os.getenv("SCHEDULER_TIMEZONE", "UTC")
+    
+    # Article Configuration
     ARTICLE_DELAY_SECONDS: int = int(os.getenv("ARTICLE_DELAY_SECONDS", "20"))
+    MAX_AGE_DAYS: int = int(os.getenv("MAX_AGE_DAYS", "3"))
 
     # News Sources - Simple field, not trying to parse as JSON
-    ENABLED_SOURCES_STR: str = os.getenv("ENABLED_SOURCES", "mihan_blockchain")
+    ENABLED_SOURCES_STR: str = os.getenv("ENABLED_SOURCES", "mihan_blockchain,arzdigital")
 
-    # User Agents - Simple field, not trying to parse as JSON
-    USER_AGENTS_STR: str = os.getenv(
-        "USER_AGENTS", 
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    )
-
+    # User Agent
+    USER_AGENT: str = os.getenv("USER_AGENT", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36")
+    
     # Persian month mapping
     PERSIAN_MONTHS: Dict[str, int] = PERSIAN_MONTHS
 
@@ -52,7 +52,24 @@ class Settings(BaseSettings):
     LOG_FORMAT: str = os.getenv("LOG_FORMAT", "%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     
     # Database Configuration
-    DB_URL: str = os.getenv("DB_URL", "")
+    MONGO_URI: str = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
+    MONGO_DB_NAME: str = os.getenv("MONGO_DB_NAME", "news_scraper_db")
+    NEWS_COLLECTION_NAME: str = "news_articles"
+    
+    # News Sources Configuration
+    NEWS_SOURCES: Dict[str, Dict] = {
+        "mihan_blockchain": {
+            "enabled": True,
+            "url": "https://mihanblockchain.com/category/news/",
+            "max_age_days": int(os.getenv("MAX_AGE_DAYS", "3"))
+        },
+        "arzdigital": {
+            "enabled": True,
+            "url": "https://arzdigital.com/breaking/",
+            "max_age_days": 3
+        }
+        # Add other news sources here
+    }
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
     
@@ -62,34 +79,18 @@ class Settings(BaseSettings):
             return []
         return [s.strip() for s in self.ENABLED_SOURCES_STR.split(",")]
     
-    def get_user_agents(self) -> List[str]:
-        """Get list of user agents from the USER_AGENTS environment variable."""
-        if not self.USER_AGENTS_STR:
-            return []
-        return [a.strip() for a in self.USER_AGENTS_STR.split(",")]
+    @property
+    def log_dir(self) -> Path:
+        """Get the log directory path."""
+        log_dir = Path(__file__).parent.parent / "logs"
+        os.makedirs(log_dir, exist_ok=True)
+        return log_dir
+
+# Create and export a singleton instance
+settings = Settings()
 
 def get_settings() -> Settings:
     """
     Returns the application settings loaded from environment variables.
     """
-    return Settings()
-
-# For backwards compatibility
-NEWS_SOURCES = {
-    "mihan_blockchain": {
-        "enabled": True,
-        "url": os.getenv("MIHAN_BLOCKCHAIN_URL", "https://mihanblockchain.com/category/news/"),
-        "max_age_days": int(os.getenv("MIHAN_BLOCKCHAIN_MAX_AGE_DAYS", "3"))
-    }
-    # Add more news sources here as needed
-}
-
-# Legacy global variables (kept for backward compatibility)
-API_BASE_URL = os.getenv("API_BASE_URL")
-API_KEY = os.getenv("API_KEY")
-SCHEDULER_INTERVAL_HOURS = int(os.getenv("SCHEDULER_INTERVAL_HOURS", "2"))
-ARTICLE_DELAY_SECONDS = int(os.getenv("ARTICLE_DELAY_SECONDS", "20"))
-USER_AGENT = os.getenv("USER_AGENT", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36")
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
-LOG_DIR = Path(__file__).parent.parent / "logs"
-os.makedirs(LOG_DIR, exist_ok=True) 
+    return settings 

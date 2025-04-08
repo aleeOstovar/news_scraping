@@ -8,8 +8,7 @@ from datetime import datetime, timedelta
 import requests
 from bs4 import BeautifulSoup
 
-# We've commented out the usage of ARTICLE_DELAY_SECONDS, so we can comment out the import as well
-from app.core.config import USER_AGENT # , ARTICLE_DELAY_SECONDS
+from app.core.config import settings
 from app.models.article import ArticleLinkModel, ArticleContentModel, ArticleFullModel
 from app.services.api_client import APIClient
 
@@ -33,7 +32,7 @@ class BaseScraper(ABC):
         """
         self.source_name = source_name
         self.max_age_days = max_age_days
-        self.headers = {"User-Agent": USER_AGENT}
+        self.headers = {"User-Agent": settings.USER_AGENT}
         self.api_client = APIClient()
         logger.info(f"Initialized {source_name} scraper")
         
@@ -244,14 +243,43 @@ class BaseScraper(ABC):
                     logger.error(f"Missing title in processed article: {url}")
                     continue
                     
-                if not processed_dict.get('content') or not isinstance(processed_dict.get('content'), list) or len(processed_dict.get('content')) == 0:
-                    logger.error(f"Missing or invalid content in processed article: {url}")
+                # Check if content exists and is a non-empty dictionary
+                if not processed_dict.get('content') or not isinstance(processed_dict.get('content'), dict) or not processed_dict.get('content'):
+                    logger.error(f"Missing or invalid content (must be non-empty dict) in processed article: {url}")
                     continue
                     
                 # Ensure imagesUrl is a list
                 if 'imagesUrl' in processed_dict and not isinstance(processed_dict['imagesUrl'], list):
                     processed_dict['imagesUrl'] = []
                 
+                # --- Image Upload --- 
+                # Upload thumbnail if it exists
+                if processed.thumbnailImage:
+                    try:
+                        new_thumbnail_url = self.api_client.upload_image(processed.thumbnailImage)
+                        processed_dict['thumbnailImage'] = new_thumbnail_url
+                        logger.info(f"Uploaded thumbnail for {url}: {new_thumbnail_url}")
+                    except Exception as upload_err:
+                        logger.error(f"Failed to upload thumbnail {processed.thumbnailImage} for {url}: {upload_err}")
+                        processed_dict['thumbnailImage'] = None # Keep original or set to None? Decide based on requirement
+                else:
+                    processed_dict['thumbnailImage'] = None
+
+                # Upload images in imagesUrl
+                new_image_urls = []
+                if processed_dict.get('imagesUrl') and isinstance(processed_dict.get('imagesUrl'), list):
+                    for image_url in processed_dict['imagesUrl']:
+                        try:
+                            new_image_url = self.api_client.upload_image(image_url)
+                            new_image_urls.append(new_image_url)
+                            logger.info(f"Uploaded image for {url}: {new_image_url}")
+                        except Exception as upload_err:
+                            logger.error(f"Failed to upload image {image_url} for {url}: {upload_err}")
+                            # Optionally keep original URL if upload fails
+                            # new_image_urls.append(image_url) 
+                processed_dict['imagesUrl'] = new_image_urls
+                # --- End Image Upload --- 
+                  
                 # Add to processed articles
                 processed_articles.append(processed_dict)
                 

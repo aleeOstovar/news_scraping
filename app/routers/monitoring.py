@@ -3,8 +3,11 @@ from typing import Dict, List, Any
 from datetime import datetime
 from app.controllers.scraper_controller import scraper_controller
 from app.core.scheduler import scheduler
+import logging
 
 router = APIRouter(prefix="/api/v1/monitoring", tags=["monitoring"])
+
+logger = logging.getLogger(__name__)
 
 @router.get("/test")
 async def test_endpoint():
@@ -40,12 +43,31 @@ async def get_scraper_status() -> Dict[str, Any]:
         # Check if there's a scraping task in progress
         is_scraping = hasattr(scraper_controller, "_scraping_in_progress") and scraper_controller._scraping_in_progress
         
+        # Get last run times for each scraper
+        last_run_times = {}
+        for source_name in scraper_controller.scrapers.keys():
+            # Get scraper progress data if available
+            progress_data = scraper_controller._scraping_progress.get(source_name, {})
+            if progress_data and progress_data.get("end_time"):
+                last_run_times[source_name] = progress_data.get("end_time")
+            elif hasattr(scraper_controller, "_last_scrape_results") and scraper_controller._last_scrape_results:
+                # Fallback to overall last scrape time
+                last_run_times[source_name] = scraper_controller._last_scrape_results.get("timestamp")
+                
+            # Ensure we have end_time for each source that's completed
+            if progress_data and progress_data.get("status") == "completed" and not progress_data.get("end_time"):
+                # Add end_time if missing but status is completed
+                progress_data["end_time"] = datetime.now().isoformat()
+                scraper_controller._scraping_progress[source_name] = progress_data
+                last_run_times[source_name] = progress_data["end_time"]
+        
         return {
             "status": "running" if scheduler_status["is_running"] else "stopped",
             "scheduler": scheduler_status,
             "enabled_sources": list(scraper_controller.scrapers.keys()),
             "last_scrape_results": getattr(scraper_controller, "_last_scrape_results", None),
-            "is_scraping": is_scraping
+            "is_scraping": is_scraping,
+            "last_run_times": last_run_times
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -157,6 +179,15 @@ async def trigger_scraping(source: str = None) -> Dict[str, Any]:
                     "articles_processed": len(results[source]),
                     "end_time": datetime.now().isoformat(),
                 })
+                
+                # Store last run information for persistence
+                if not hasattr(scraper_controller, "_last_scrape_results"):
+                    scraper_controller._last_scrape_results = {}
+                scraper_controller._last_scrape_results = {
+                    "timestamp": datetime.now().isoformat(),
+                    "source": source,
+                    "total_articles": len(articles) if articles else 0
+                }
                 
                 # Send articles to API
                 if articles and len(articles) > 0:
@@ -282,7 +313,9 @@ async def get_scraping_stats() -> Dict[str, Any]:
         # Get last scrape results
         last_results = getattr(scraper_controller, "_last_scrape_results", None)
         
-        if not last_results:
+        # Check if we have an API client
+        if not hasattr(scraper_controller, "api_client"):
+            logger.error("API client not initialized")
             # Initialize with empty data if no previous scraping has occurred
             return {
                 "total_articles": 0,
@@ -295,24 +328,60 @@ async def get_scraping_stats() -> Dict[str, Any]:
                 "last_run": None
             }
         
-        # Calculate statistics
-        total_articles = sum(len(articles) if articles else 0 for articles in last_results.get("results", {}).values())
-        
-        # Per-source statistics
+        # Get article counts from API for each source
         sources_stats = {}
+        total_articles = 0
+        
         for source in scraper_controller.scrapers.keys():
-            articles = last_results.get("results", {}).get(source, [])
-            sources_stats[source] = {
-                "articles_count": len(articles) if articles else 0,
-                "last_run": last_results.get("timestamp")
-            }
+            try:
+                # Get article count for this source from the API
+                articles_count = 0
+                try:
+                    # Create URL for source-specific articles count
+                    if scraper_controller.api_client:
+                        # Make API request to get count
+                        api_response = scraper_controller.api_client.session.get(
+                            scraper_controller.api_client.build_url(f"/news-posts/count?source={source}"),
+                            headers=scraper_controller.api_client.headers
+                        )
+                        if api_response.status_code == 200:
+                            result = api_response.json()
+                            articles_count = result.get("count", 0)
+                except Exception as count_error:
+                    logger.error(f"Error getting article count for {source}: {count_error}")
+                
+                # Get last run time
+                last_run = None
+                if hasattr(scraper_controller, "_scraping_progress") and source in scraper_controller._scraping_progress:
+                    progress_data = scraper_controller._scraping_progress.get(source, {})
+                    if progress_data.get("end_time"):
+                        last_run = progress_data.get("end_time")
+                
+                sources_stats[source] = {
+                    "articles_count": articles_count,
+                    "last_run": last_run
+                }
+                
+                total_articles += articles_count
+            except Exception as source_error:
+                logger.error(f"Error getting stats for source {source}: {source_error}")
+                sources_stats[source] = {
+                    "articles_count": 0,
+                    "last_run": None
+                }
+        
+        # Get overall last run time
+        last_run = None
+        if last_results:
+            last_run = last_results.get("timestamp")
         
         return {
             "total_articles": total_articles,
             "sources": sources_stats,
-            "last_run": last_results.get("timestamp")
+            "last_run": last_run
         }
     except Exception as e:
+        logger.error(f"Error getting scraping stats: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/articles")
