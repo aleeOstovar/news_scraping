@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 from dotenv import load_dotenv
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Load environment variables from .env file
@@ -57,18 +57,17 @@ class Settings(BaseSettings):
     NEWS_COLLECTION_NAME: str = "news_articles"
     
     # News Sources Configuration
-    NEWS_SOURCES: Dict[str, Dict] = {
+    NEWS_SOURCES: Dict[str, Dict[str, Any]] = {
         "mihan_blockchain": {
-            "enabled": True,
-            "url": "https://mihanblockchain.com/category/news/",
-            "max_age_days": int(os.getenv("MAX_AGE_DAYS", "3"))
+            "enabled": "mihan_blockchain" in ENABLED_SOURCES_STR.split(","),
+            "url": os.getenv("MIHAN_BLOCKCHAIN_URL", "https://mihanblockchain.com/category/news/"),
+            "max_age_days": int(os.getenv("MIHAN_BLOCKCHAIN_MAX_AGE_DAYS", "3"))
         },
         "arzdigital": {
-            "enabled": True,
-            "url": "https://arzdigital.com/breaking/",
-            "max_age_days": 3
+            "enabled": "arzdigital" in ENABLED_SOURCES_STR.split(","),
+            "url": os.getenv("ARZ_DIGITAL_URL", "https://arzdigital.com/breaking/"),
+            "max_age_days": int(os.getenv("ARZ_DIGITAL_MAX_AGE_DAYS", "3"))
         }
-        # Add other news sources here
     }
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

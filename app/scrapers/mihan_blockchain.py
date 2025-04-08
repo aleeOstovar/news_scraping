@@ -48,65 +48,57 @@ class MihanBlockchainScraper(BaseScraper):
         
         logger.info(f"Found {len(articles)} total articles on the page, will collect all within the past {self.max_age_days} days")
         
-        # Extract the link and date for each article
         for article in articles:
             try:
                 # Extract the link
-                link_element = article.select_one('div.jeg_postblock_content > div.jeg_post_meta > div.jeg_meta_date > a')
-                if not link_element:
+                link_element = article.select_one('h3.jeg_post_title > a')
+                if not link_element or not link_element.has_attr('href'):
                     continue
                     
-                link = link_element['href']
+                link = link_element['href'].strip()
                 
                 # Extract the date
-                date_element = article.select_one('div.jeg_postblock_content > div.jeg_post_meta > div.jeg_meta_date')
+                date_element = article.select_one('div.jeg_meta_date > a')
                 if not date_element:
                     continue
                     
                 date_str = date_element.get_text(strip=True)
                 
-                # Convert Persian date string to Gregorian datetime
                 try:
-                    # Split the date and time parts
-                    persian_date, persian_time = date_str.split(" - ")
-                    
-                    # Split the Persian date into day, month, and year
-                    day, month_name, year = persian_date.split()
-                    
-                    # Map the Persian month name to the month number
-                    month = settings.PERSIAN_MONTHS[month_name]
-                    
-                    # Convert the Persian date to a format that strptime can parse
-                    converted_date = f"{year}-{month:02d}-{int(day):02d}"
-                    
-                    # Parse the converted date into JalaliDateTime object
-                    persian_datetime = JalaliDateTime.strptime(converted_date, '%Y-%m-%d')
-        
-                    # Add the time information
-                    hour, minute = map(int, persian_time.split(":"))
-                    persian_datetime = persian_datetime.replace(hour=hour, minute=minute)
-        
-                    # Convert to Gregorian date
-                    gregorian_datetime = persian_datetime.to_gregorian()
-        
-                    # Convert to UTC
-                    utc_datetime = gregorian_datetime.replace(tzinfo=None)
-        
-                    # Get the date difference
-                    time_diff = current_time - utc_datetime.replace(tzinfo=timezone.utc)
-        
-                    # Only add if within the specified days
-                    max_days = min(self.max_age_days, 3)  # Use either max_age_days or 3, whichever is smaller
-                    if time_diff <= timedelta(days=max_days):
-                        # Format the datetime into a string
-                        formatted_date = utc_datetime.strftime('%Y-%m-%d')
-        
-                        # Append to result
-                        result.append(ArticleLinkModel(
-                            link=link,
-                            date=formatted_date
-                        ))
+                    # Convert Persian date to Gregorian
+                    date_parts = date_str.split()
+                    if len(date_parts) >= 3:
+                        day = int(date_parts[0])
+                        month_name = date_parts[1]
+                        year = int(date_parts[2])
                         
+                        # Convert Persian month name to number
+                        month = settings.PERSIAN_MONTHS.get(month_name)
+                        if not month:
+                            logger.error(f"Unknown Persian month: {month_name}")
+                            continue
+                            
+                        # Create Jalali date and convert to Gregorian
+                        jalali_date = JalaliDateTime(year, month, day)
+                        gregorian_date = jalali_date.to_gregorian()
+                        
+                        # Convert to UTC datetime
+                        article_datetime = datetime(
+                            gregorian_date.year,
+                            gregorian_date.month,
+                            gregorian_date.day,
+                            tzinfo=timezone.utc
+                        )
+                        
+                        # Check article age
+                        time_diff = current_time - article_datetime
+                        if time_diff <= timedelta(days=self.max_age_days):
+                            formatted_date = article_datetime.strftime('%Y-%m-%d')
+                            result.append(ArticleLinkModel(
+                                link=link,
+                                date=formatted_date
+                            ))
+                            
                 except Exception as e:
                     logger.error(f"Error converting date {date_str}: {e}")
                     
@@ -115,8 +107,8 @@ class MihanBlockchainScraper(BaseScraper):
         
         logger.info(f"Found {len(result)} articles within the last {min(self.max_age_days, 3)} days")
         
-        # Sort articles from oldest to newest for processing
-        result.sort(key=lambda x: x.date)
+        # Sort articles from newest to oldest
+        result.sort(key=lambda x: x.date, reverse=True)
         
         return result
         
@@ -169,7 +161,7 @@ class MihanBlockchainScraper(BaseScraper):
             
     def process_article_content(self, article: ArticleContentModel) -> Optional[ArticleFullModel]:
         """
-        Process MihanBlockchain article content to extract structured data.
+        Process Mihan Blockchain article content to extract structured data.
         
         Args:
             article: ArticleContentModel object containing the raw article content
@@ -221,7 +213,7 @@ class MihanBlockchainScraper(BaseScraper):
             image_models = [
                 ImageModel(
                     id=img['id'],
-                    url=img['url'],  # Use the potentially updated URL
+                    url=img['url'],  # Use the uploaded URL
                     caption=img['caption'],
                     type=img['type']
                 ) for img in uploaded_images
@@ -230,9 +222,9 @@ class MihanBlockchainScraper(BaseScraper):
             # Create article data using uploaded URLs
             article_data = ArticleFullModel(
                 title=title,
-                source="MihanBlockchain",
+                source="Mihan Blockchain",
                 sourceUrl=article.link,
-                # publishDate=article.date, # Assuming sourceDate is sufficient
+                publishDate=article.date,
                 creator=article.creator,
                 thumbnailImage=uploaded_thumbnail_url, # Use the uploaded thumbnail URL
                 content=content,
@@ -411,6 +403,12 @@ class MihanBlockchainScraper(BaseScraper):
 
             # --- Handle specific tag types (figure, blockquote, headings, p, li) ---
             if tag_name == 'figure':
+                # Check if this figure is inside a blockquote
+                if any(parent.name == 'blockquote' for parent in element.parents):
+                    # Skip this figure as it's part of a blockquote that will be processed separately
+                    processed_element_ids.add(element_id)
+                    continue
+
                 img_placeholder = element.find(string=re.compile(r'\*\*IMAGE_PLACEHOLDER_img\d+\*\*'))
                 if img_placeholder:
                     placeholder_text = img_placeholder.strip()

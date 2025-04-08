@@ -236,7 +236,7 @@ class APIClient:
             # Use the appropriate MIME type or default to image/jpeg
             mime_type = mime_types.get(file_ext, 'image/jpeg')
             
-            # API endpoint for image uploads
+            # API endpoint for image uploads - using just /images since build_url adds /v1
             url = self.build_url('/images')
             
             files = {'file': (filename, response.content, mime_type)}
@@ -249,9 +249,14 @@ class APIClient:
             api_response.raise_for_status()
 
             # Extract new URL from API response
-            new_url = api_response.json().get('url')
-            logger.info(f"Image uploaded successfully to {new_url}")
-            return new_url
+            response_data = api_response.json()
+            if response_data.get('status') == 'success' and response_data.get('url'):
+                new_url = response_data['url']
+                logger.info(f"Image uploaded successfully to {new_url}")
+                return new_url
+            else:
+                logger.error(f"Invalid response format from file manager: {response_data}")
+                return image_url
         except RequestException as e:
             logger.error(f"Error uploading image {image_url}: {e}")
             return image_url  # Return original URL if upload fails 

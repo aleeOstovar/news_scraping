@@ -97,7 +97,8 @@ class ArzDigitalScraper(BaseScraper):
 
         logger.info(f"Found {len(result)} articles within the last {min(self.max_age_days, 3)} days")
 
-        result.sort(key=lambda x: x.date)
+        # Sort articles from newest to oldest
+        result.sort(key=lambda x: x.date, reverse=True)
         return result
         
     def get_article_content(self, url: str, date: str) -> Optional[ArticleContentModel]:
@@ -163,12 +164,30 @@ class ArzDigitalScraper(BaseScraper):
                 logger.error(f"No HTML content found for article: {article.link}")
                 return None
             
-            # Thumbnail is now extracted in get_article_content
-            thumbnail_image = article.thumbnail_image 
-            logger.info(f"Using thumbnail from ArticleContentModel: {thumbnail_image}")
+            # Upload thumbnail image
+            uploaded_thumbnail_url = None
+            if article.thumbnail_image:
+                logger.info(f"Uploading thumbnail: {article.thumbnail_image}")
+                uploaded_thumbnail_url = self.api_client.upload_image(article.thumbnail_image)
+                logger.info(f"Thumbnail uploaded to: {uploaded_thumbnail_url}")
+            else:
+                logger.warning(f"No thumbnail found to upload for {article.link}")
             
             # Extract and process images
             html_with_placeholders, images = self.extract_and_replace_images(html_content)
+            
+            # Upload additional images and update their URLs
+            uploaded_images = []
+            for img_data in images:
+                original_url = img_data.get('url')
+                if original_url:
+                    logger.info(f"Uploading image: {original_url}")
+                    new_url = self.api_client.upload_image(original_url)
+                    logger.info(f"Image uploaded to: {new_url}")
+                    img_data['url'] = new_url  # Update the URL in the dictionary
+                else:
+                    logger.warning(f"Image data missing URL: {img_data}")
+                uploaded_images.append(img_data)
             
             # Extract content
             content = self.extract_content(html_with_placeholders)
@@ -179,20 +198,27 @@ class ArzDigitalScraper(BaseScraper):
             # Extract tags
             tags = self.extract_tags(html_content)
             
-            # Get image URLs
-            image_urls = [img['url'] for img in images]
+            # Create ImageModel objects for each *uploaded* image
+            image_models = [
+                ImageModel(
+                    id=img['id'],
+                    url=img['url'],  # Use the uploaded URL
+                    caption=img['caption'],
+                    type=img['type']
+                ) for img in uploaded_images
+            ]
             
-            # Create article data
+            # Create article data using uploaded URLs
             article_data = ArticleFullModel(
                 title=title,
                 source="Arzdigital",
                 sourceUrl=article.link,
                 publishDate=article.date,
                 creator=article.creator,
-                thumbnailImage=thumbnail_image, 
+                thumbnailImage=uploaded_thumbnail_url, # Use the uploaded thumbnail URL
                 content=content,
                 tags=tags,
-                imagesUrl=image_urls,
+                imagesUrl=image_models, # Use models with uploaded URLs
                 sourceDate=article.date
             )
             
@@ -276,7 +302,7 @@ class ArzDigitalScraper(BaseScraper):
             )
 
             # Skip first 2 and last
-            relevant_tags = tag_elements[2:-1]
+            relevant_tags = tag_elements[1:]
 
             for tag in relevant_tags:
                 tag_text = tag.get_text(strip=True)

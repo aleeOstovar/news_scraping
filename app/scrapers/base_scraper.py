@@ -122,19 +122,14 @@ class BaseScraper(ABC):
         from app.controllers.scraper_controller import scraper_controller
         start_time = datetime.now()
         
-        # Hard limit on number of articles to process
-        max_processed_articles = 10
-        
         logger.info(f"Starting scraper for {self.source_name} at {source_url}")
         
         # Get article links
         article_links = self.get_article_links(source_url)
-        logger.info(f"Found {len(article_links)} article links, max to process: {max_processed_articles}")
+        logger.info(f"Found {len(article_links)} article links")
         
-        # Hard limit on the number of articles to process
-        if len(article_links) > max_processed_articles:
-            logger.info(f"Limiting article links to {max_processed_articles} (was {len(article_links)})")
-            article_links = article_links[:max_processed_articles]
+        # Sort articles from newest to oldest for processing
+        article_links.sort(key=lambda x: x.date, reverse=True)
         
         # Update progress - after finding links
         if hasattr(scraper_controller, "_scraping_progress") and self.source_name in scraper_controller._scraping_progress:
