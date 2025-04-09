@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     MAX_AGE_DAYS: int = int(os.getenv("MAX_AGE_DAYS", "3"))
 
     # News Sources - Simple field, not trying to parse as JSON
-    ENABLED_SOURCES_STR: str = os.getenv("ENABLED_SOURCES", "mihan_blockchain,arzdigital")
+    ENABLED_SOURCES_STR: str = os.getenv("ENABLED_SOURCES", "mihan_blockchain,arzdigital,defier")
 
     # User Agent
     USER_AGENT: str = os.getenv("USER_AGENT", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36")
@@ -67,6 +67,11 @@ class Settings(BaseSettings):
             "enabled": "arzdigital" in ENABLED_SOURCES_STR.split(","),
             "url": os.getenv("ARZ_DIGITAL_URL", "https://arzdigital.com/breaking/"),
             "max_age_days": int(os.getenv("ARZ_DIGITAL_MAX_AGE_DAYS", "3"))
+        },
+        "defier": {
+            "enabled": "defier" in ENABLED_SOURCES_STR.split(","),
+            "url": os.getenv("DEFIER_URL", "https://defier.media/category/news/"),
+            "max_age_days": int(os.getenv("DEFIER_MAX_AGE_DAYS", "3"))
         }
     }
 

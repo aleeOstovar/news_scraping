@@ -9,8 +9,9 @@ from app.scrapers.mihan_blockchain import MihanBlockchainScraper
 from app.scrapers.base_scraper import BaseScraper
 from app.services.api_client import APIClient
 
-# Import new scraper
+# Import scrapers
 from app.scrapers.arzdigital import ArzDigitalScraper
+from app.scrapers.defier import DefierScraper
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,26 @@ class ScraperController:
                 logger.info("Initialized Arzdigital scraper")
             except Exception as e:
                 logger.error(f"Failed to initialize Arzdigital scraper: {e}")
+        
+        # Initialize Defier scraper if enabled
+        if settings.NEWS_SOURCES.get("defier", {}).get("enabled", False):
+            # Initialize progress tracking
+            self._scraping_progress["defier"] = {
+                "status": "idle",
+                "progress": 0,
+                "articles_found": 0,
+                "articles_processed": 0
+            }
+            
+            # Initialize the scraper
+            try:
+                self.scrapers["defier"] = DefierScraper(
+                    api_client=self.api_client,
+                    max_age_days=settings.MAX_AGE_DAYS
+                )
+                logger.info("Initialized Defier scraper")
+            except Exception as e:
+                logger.error(f"Failed to initialize Defier scraper: {e}")
         
         # Add more scrapers for other news sources here
         
