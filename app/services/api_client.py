@@ -39,7 +39,7 @@ class APIClient:
         
         # Setup headers
         self.headers = {
-            'Content-Type': 'application/json',
+            'Content-Type': 'application/json; charset=utf-8',
             'Accept': 'application/json'
         }
         if self.api_key:

@@ -49,7 +49,42 @@ class BaseScraper(ABC):
         try:
             response = requests.get(url, headers=self.headers)
             response.raise_for_status()
-            return response.text
+            
+            # First try to detect encoding from the HTTP response or HTML meta tags
+            if response.encoding and response.encoding.upper() != 'ISO-8859-1':
+                # If requests detected a valid encoding (not the default fallback ISO-8859-1),
+                # use that encoding
+                logger.debug(f"Using detected encoding from response: {response.encoding}")
+                return response.text
+            
+            # Try to find encoding in the content
+            # Look for meta charset in the HTML
+            content_bytes = response.content
+            try:
+                import re
+                charset_match = re.search(b'<meta[^>]*charset=[\'"]*([^\'">]*)', content_bytes)
+                if charset_match:
+                    detected_charset = charset_match.group(1).decode('ascii')
+                    logger.debug(f"Found charset in HTML meta tag: {detected_charset}")
+                    return content_bytes.decode(detected_charset, errors='replace')
+            except Exception as e:
+                logger.warning(f"Error detecting charset from HTML: {e}")
+            
+            # If we couldn't detect encoding or it's the default fallback, try UTF-8
+            # since it's common for Persian/Arabic content
+            try:
+                logger.debug("Trying UTF-8 encoding")
+                return content_bytes.decode('utf-8')
+            except UnicodeDecodeError:
+                # If UTF-8 fails, try a common Persian encoding
+                try:
+                    logger.debug("Trying windows-1256 encoding (common for Persian)")
+                    return content_bytes.decode('windows-1256')
+                except UnicodeDecodeError:
+                    # Fall back to the original response text with error replacement
+                    logger.warning("Falling back to default encoding with error replacement")
+                    return content_bytes.decode('utf-8', errors='replace')
+                
         except requests.RequestException as e:
             logger.error(f"Error fetching URL {url}: {str(e)}")
             return None
@@ -66,7 +101,7 @@ class BaseScraper(ABC):
         """
         html = self.get_html(url)
         if html:
-            return BeautifulSoup(html, 'html.parser')
+            return BeautifulSoup(html, 'html.parser', from_encoding='utf-8')
         return None
         
     @abstractmethod
@@ -186,7 +221,7 @@ class BaseScraper(ABC):
                     
                     # If we've found 10 articles already exist, we can stop processing
                     # This helps avoid processing a large number of duplicate articles
-                    if articles_existing_in_api >= 5:
+                    if articles_existing_in_api >= 10:
                         logger.info(f"Found {articles_existing_in_api} articles that already exist in API. Stopping processing.")
                         if hasattr(scraper_controller, "_scraping_logs"):
                             log_message = f"Found {articles_existing_in_api} articles that already exist in API. Stopping processing to avoid duplicates."
