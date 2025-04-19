@@ -18,7 +18,7 @@ class ArzDigitalScraper(BaseScraper):
     Scraper for ArzDigital news website.
     """
     
-    def __init__(self, api_client=None, max_age_days: int = 3):
+    def __init__(self, api_client=APIClient, max_age_days: int = 3):
         """
         Initialize the ArzDigital scraper.
         

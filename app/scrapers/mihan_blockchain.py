@@ -40,24 +40,24 @@ class MihanBlockchainScraper(BaseScraper):
             logger.error(f"Failed to fetch and parse URL: {url}")
             return result
             
-        # Get current time for age comparison
+
         current_time = datetime.now(timezone.utc)
         
-        # Select the articles using CSS selectors
+
         articles = soup.select('div.jnews_category_content_wrapper > div.jeg_postblock_4.jeg_postblock > div.jeg_posts.jeg_block_container > div.jeg_posts > article.jeg_post')
         
         logger.info(f"Found {len(articles)} total articles on the page, will collect all within the past {self.max_age_days} days")
         
         for article in articles:
             try:
-                # Extract the link
+
                 link_element = article.select_one('h3.jeg_post_title > a')
                 if not link_element or not link_element.has_attr('href'):
                     continue
                     
                 link = link_element['href'].strip()
                 
-                # Extract the date
+
                 date_element = article.select_one('div.jeg_meta_date > a')
                 if not date_element:
                     continue
@@ -65,7 +65,7 @@ class MihanBlockchainScraper(BaseScraper):
                 date_str = date_element.get_text(strip=True)
                 
                 try:
-                    # Convert Persian date to Gregorian
+
                     date_parts = date_str.split()
                     if len(date_parts) >= 3:
                         day = int(date_parts[0])
@@ -78,19 +78,17 @@ class MihanBlockchainScraper(BaseScraper):
                             logger.error(f"Unknown Persian month: {month_name}")
                             continue
                             
-                        # Create Jalali date and convert to Gregorian
+
                         jalali_date = JalaliDateTime(year, month, day)
                         gregorian_date = jalali_date.to_gregorian()
                         
-                        # Convert to UTC datetime
                         article_datetime = datetime(
                             gregorian_date.year,
                             gregorian_date.month,
                             gregorian_date.day,
                             tzinfo=timezone.utc
                         )
-                        
-                        # Check article age
+
                         time_diff = current_time - article_datetime
                         if time_diff <= timedelta(days=self.max_age_days):
                             formatted_date = article_datetime.strftime('%Y-%m-%d')
@@ -107,7 +105,7 @@ class MihanBlockchainScraper(BaseScraper):
         
         logger.info(f"Found {len(result)} articles within the last {min(self.max_age_days, 3)} days")
         
-        # Sort articles from newest to oldest
+
         result.sort(key=lambda x: x.date, reverse=True)
         
         return result
@@ -124,7 +122,7 @@ class MihanBlockchainScraper(BaseScraper):
             return None
         
         try:
-            # Extract the data content, keeping the HTML tags
+
             data = soup.select_one('div.jeg_inner_content')
             if not data:
                 logger.error(f"Could not find content div for article: {url}")
@@ -132,20 +130,19 @@ class MihanBlockchainScraper(BaseScraper):
             
             data_html = data.decode_contents()
 
-            # Extract the creator
+
             creator = soup.select_one('div.jeg_meta_container > div.jeg_post_meta.jeg_post_meta_1 > div.meta_left > div.jeg_meta_author > a')
             creator_name = creator.get_text(strip=True) if creator else "N/A"
 
-            # Extract the title
+
             title = soup.select_one('div.entry-header > h1.jeg_post_title')
             title_text = title.get_text(strip=True) if title else "N/A"
             
-            # Extract thumbnail image here
+
             thumbnail_image = self.extract_thumbnail_image(data_html)
             logger.info(f"Extracted thumbnail in get_article_content: {thumbnail_image}")
             data_html = soup.select_one('div.entry-content').decode_contents()
 
-            # Create and return the model
             return ArticleContentModel(
                 link=url,
                 date=date,
@@ -184,10 +181,10 @@ class MihanBlockchainScraper(BaseScraper):
             else:
                 logger.warning(f"No thumbnail found to upload for {article.link}")
             
-            # Extract and process images
+
             html_with_placeholders, images = self.extract_and_replace_images(html_content)
             
-            # Upload additional images and update their URLs
+
             uploaded_images = []
             for img_data in images:
                 original_url = img_data.get('url')
@@ -200,36 +197,35 @@ class MihanBlockchainScraper(BaseScraper):
                     logger.warning(f"Image data missing URL: {img_data}")
                 uploaded_images.append(img_data)
             
-            # Extract content
+
             content = self.extract_content(html_with_placeholders)
             
-            # Use the title from the article model
             title = article.title
             
-            # Extract tags
+           
             tags = self.extract_tags(html_content)
             
-            # Create ImageModel objects for each *uploaded* image
+            
             image_models = [
                 ImageModel(
                     id=img['id'],
-                    url=img['url'],  # Use the uploaded URL
+                    url=img['url'],  
                     caption=img['caption'],
                     type=img['type']
                 ) for img in uploaded_images
             ]
             
-            # Create article data using uploaded URLs
+           
             article_data = ArticleFullModel(
                 title=title,
                 source="Mihan Blockchain",
                 sourceUrl=article.link,
                 publishDate=article.date,
                 creator=article.creator,
-                thumbnailImage=uploaded_thumbnail_url, # Use the uploaded thumbnail URL
+                thumbnailImage=uploaded_thumbnail_url, 
                 content=content,
                 tags=tags,
-                imagesUrl=image_models, # Use models with uploaded URLs
+                imagesUrl=image_models, 
                 sourceDate=article.date
             )
             
@@ -245,19 +241,15 @@ class MihanBlockchainScraper(BaseScraper):
         """
         soup = BeautifulSoup(html, 'html.parser')
         
-        # Look for the thumbnail image
+        
         try:
-            # First try to find the featured image
+
             featured_img = soup.select_one('div.jeg_featured > a > div.thumbnail-container')
             if featured_img:
                 img_tag = featured_img.select_one('img')
                 if img_tag and 'data-lazy-src' in img_tag.attrs:
                     return img_tag['data-lazy-src']
             
-            # If not found, try to find any image in the article
-            # article_img = soup.select_one('img')
-            # if article_img and 'data-lazy-src' in article_img.attrs:
-            #     return article_img['data-lazy-src']
                 
         except Exception as e:
             logger.error(f"Error extracting thumbnail image: {e}")
@@ -278,19 +270,18 @@ class MihanBlockchainScraper(BaseScraper):
         images_url = []
         processed_urls = set()
         
-        # Use DOTALL so that '.' matches newline characters
         figure_regex = (
-            r'<div class="wp-block-image">.*?'              # Opening div with class wp-block-image
-            r'<figure[^>]*>'                                # Opening figure tag
-            r'.*?'                                         # any content (non-greedy)
-            r'<a[^>]*>'                                    # opening anchor tag
-            r'.*?'                                         # any content (non-greedy)
-            r'<img[^>]*data-lazy-src="([^"]+)"[^>]*>'       # img tag capturing the data-lazy-src attribute
-            r'.*?</a>'                                     # closing anchor tag
-            r'.*?'                                         # any content (non-greedy)
-            r'(?:<figcaption[^>]*>(.*?)</figcaption>)?'      # optional figcaption capturing its content
-            r'.*?</figure>'                                 # closing figure tag
-            r'.*?</div>'                                   # closing the wp-block-image div
+            r'<div class="wp-block-image">.*?'              
+            r'<figure[^>]*>'                              
+            r'.*?'                                         
+            r'<a[^>]*>'                                 
+            r'.*?'                                        
+            r'<img[^>]*data-lazy-src="([^"]+)"[^>]*>'       
+            r'.*?</a>'                                    
+            r'.*?'                                         
+            r'(?:<figcaption[^>]*>(.*?)</figcaption>)?'     
+            r'.*?</figure>'                                 
+            r'.*?</div>'                                  
             )          
         image_counter = 0
         
@@ -299,11 +290,11 @@ class MihanBlockchainScraper(BaseScraper):
             match_position = match.start()
             image_url = match.group(1)
             
-            # Skip if in excluded container or already processed
+
             if self.is_in_excluded_container(html, match_position) or image_url in processed_urls:
                 continue
             
-            # Extract caption, stripping HTML tags if present
+
             caption_html = match.group(2)
             caption = re.sub(r'<[^>]+>', '', caption_html).strip() if caption_html else None
             
@@ -317,7 +308,7 @@ class MihanBlockchainScraper(BaseScraper):
                 'type': 'figure'
             })
             
-            # Replace the entire figure div with the placeholder
+
             processed_html = processed_html.replace(full_match, placeholder)
             processed_urls.add(image_url)
             image_counter += 1
@@ -345,7 +336,6 @@ class MihanBlockchainScraper(BaseScraper):
 
         # --- Remove specific unwanted sections FIRST ---
 
-        # Remove EZ Table of Contents elements if they exist within the container
         toc_container = content_container.select_one("#ez-toc-container")
         if toc_container:
             toc_container.decompose()
@@ -354,18 +344,16 @@ class MihanBlockchainScraper(BaseScraper):
         if toc_title:
             toc_title.decompose()
 
-        # Find the TOC list (ul.ez-toc-list) and remove its parent <nav> tag
-        # This is generally safer than removing all <nav> tags
+
         toc_list = content_container.select_one("nav > ul.ez-toc-list")
         if toc_list:
             toc_nav = toc_list.find_parent('nav')
             if toc_nav:
-                # Double check it's still in the tree relative to the container
-                # This check might be overly cautious but prevents errors if structure is odd
+
                 if toc_nav in content_container.find_all(recursive=False) or toc_nav.find_parent(content_container.name, id=content_container.get('id'), class_=content_container.get('class')):
                     toc_nav.decompose()
             else:
-                # If list exists but parent isn't nav (unlikely for EZ TOC), just remove the list
+                
                 if toc_list.parent:
                     toc_list.decompose()
 
@@ -373,12 +361,12 @@ class MihanBlockchainScraper(BaseScraper):
         general_unwanted_selectors = [
             "div.jeg_post_source", "div.jeg_post_tags",
             "script", "style", "noscript",
-            "header", "footer", "aside" # Removed 'nav' here as we handled the specific TOC nav
+            "header", "footer", "aside" 
         ]
         for selector in general_unwanted_selectors:
-            # Use select to find all matching elements within the container
+
             for element in content_container.select(selector):
-                # Check if the element still exists (wasn't decomposed via a parent like TOC nav)
+
                 if element.parent:
                     element.decompose()
 
@@ -391,7 +379,7 @@ class MihanBlockchainScraper(BaseScraper):
         relevant_tags = ['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'figure', 'blockquote', 'li']
         processed_element_ids = set()
         
-        # Process all elements in order, but track which p tags are inside blockquotes
+
         for element in content_container.find_all(relevant_tags, recursive=True):
             element_id = id(element)
             if element_id in processed_element_ids:
@@ -401,11 +389,10 @@ class MihanBlockchainScraper(BaseScraper):
             key = None
             target_element_for_text = element
 
-            # --- Handle specific tag types (figure, blockquote, headings, p, li) ---
+
             if tag_name == 'figure':
-                # Check if this figure is inside a blockquote
                 if any(parent.name == 'blockquote' for parent in element.parents):
-                    # Skip this figure as it's part of a blockquote that will be processed separately
+
                     processed_element_ids.add(element_id)
                     continue
 
@@ -424,33 +411,27 @@ class MihanBlockchainScraper(BaseScraper):
                 key = f"blockquote{counters['blockquote']}"
                 counters['blockquote'] += 1
                 
-                # Get the inner HTML of the blockquote
                 inner_html = element.decode_contents()
                 cleaned_html = inner_html.strip()
                 
                 if not cleaned_html:
-                    # Skip if blockquote is empty after cleaning
                     processed_element_ids.add(element_id)
                     counters['blockquote'] -= 1
                     continue
                 
-                # Store the inner HTML
                 content_elements[key] = cleaned_html
                 
-                # Mark all child elements as processed so they won't be processed again
                 for child in element.find_all(recursive=True):
                     processed_element_ids.add(id(child))
                     
                 processed_element_ids.add(element_id)
-                continue  # Skip common text extraction for blockquotes
+                continue  
 
             elif tag_name.startswith('h'):
                 key = f"{tag_name}{counters[tag_name]}"
                 counters[tag_name] += 1
             elif tag_name == 'p':
-                # Check if this paragraph is inside a blockquote
                 if any(parent.name == 'blockquote' for parent in element.parents):
-                    # Skip this paragraph as it's part of a blockquote that will be processed separately
                     processed_element_ids.add(element_id)
                     continue
                     
@@ -464,7 +445,6 @@ class MihanBlockchainScraper(BaseScraper):
                 processed_element_ids.add(element_id)
                 continue
 
-            # --- Common Text Extraction & Cleaning ---
             text = target_element_for_text.get_text(separator=" ", strip=True)
             text = re.sub(r'\s+', ' ', text).strip()
 
@@ -504,10 +484,8 @@ class MihanBlockchainScraper(BaseScraper):
         tags = []
         
         try:
-            # Look for tags container
             tag_container = soup.select_one('div.jeg_post_tags')
             if tag_container:
-                # Extract all tag links
                 tag_links = tag_container.select('a')
                 for tag_link in tag_links:
                     tag_text = tag_link.get_text(strip=True)
@@ -569,33 +547,21 @@ class MihanBlockchainScraper(BaseScraper):
         Also removes p tags inside blockquotes while preserving their content.
         Additionally removes a tags inside blockquotes while preserving their content and adding a space after.
         """
-        # First, process blockquotes to handle p tags and a tags
         soup = BeautifulSoup(html_content, 'html.parser')
         
-        # Find all blockquotes
         for blockquote in soup.find_all('blockquote'):
-            # First handle all <a> tags inside <p> tags
             for a_tag in blockquote.find_all('a', recursive=True):
-                # Get the text content
                 a_text = a_tag.get_text()
-                # Replace the a tag with its text content plus a space
                 a_tag.replace_with(f"{a_text} ")
             for strong_tag in blockquote.find_all('strong', recursive=True):
-                # Get the text content
                 strong_text = strong_tag.get_text()
-                # Replace the a tag with its text content plus a space
                 strong_tag.replace_with(f"{strong_text} ")
             
-            # Now find all p tags within this blockquote
             for p_tag in blockquote.find_all('p', recursive=True):
-                # Replace the p tag with its contents
                 p_tag.replace_with(*p_tag.contents)
         
-        # Convert back to string for further processing
         html_content = str(soup)
         
-        # This pattern matches any HTML tag for p, h1-h6, figure, or blockquote.
-        # It captures whether the tag is closing (group 2) and its tag type (group 3).
         pattern = re.compile(
             r'(<\s*(/)?\s*(p|h[1-6]|figure|blockquote)\b[^>]*>)', 
             re.IGNORECASE
@@ -606,27 +572,22 @@ class MihanBlockchainScraper(BaseScraper):
         p_opened = False
 
         for match in pattern.finditer(html_content):
-            full_tag = match.group(1)      # The full matched tag
-            is_closing = bool(match.group(2))  # True if it's a closing tag (e.g. </p>)
-            tag_type = match.group(3).lower()  # The tag type, e.g., 'p', 'h1', etc.
+            full_tag = match.group(1)   
+            is_closing = bool(match.group(2)) 
+            tag_type = match.group(3).lower() 
             start, end = match.span(1)
             
-            # Append the text between the previous match and the current tag.
+
             result.append(html_content[last_index:start])
             
-            # If we encounter an opening tag (not a closing tag) that is one of our triggers,
-            # and if there's an open <p> that hasn't been closed yet, insert a closing </p>.
+
             if not is_closing and tag_type in ('p', 'figure', 'blockquote') or (not is_closing and tag_type.startswith('h')):
                 if p_opened:
                     result.append('</p>')
                     p_opened = False
             
-            # Append the current tag.
             result.append(full_tag)
             
-            # Update the p_opened flag:
-            # - For an opening <p> tag, mark that a paragraph is open.
-            # - For a closing </p> tag, mark that the paragraph is closed.
             if tag_type == 'p':
                 if is_closing:
                     p_opened = False
@@ -635,10 +596,9 @@ class MihanBlockchainScraper(BaseScraper):
 
             last_index = end
 
-        # Append any remaining text after the last tag.
         result.append(html_content[last_index:])
         
-        # If there's an unclosed <p> at the end of the content, close it.
+
         if p_opened:
             result.append('</p>')
         
@@ -656,27 +616,22 @@ class MihanBlockchainScraper(BaseScraper):
         """
         articles = []
         
-        # Get article links
         article_links = self.get_article_links(base_url)
         logger.info(f"Found {len(article_links)} article links")
         
-        # Process each article
         for i, article_link in enumerate(article_links):
             logger.info(f"Processing article {i+1}/{len(article_links)}: {article_link.link}")
             
-            # Get article content
             content = self.get_article_content(article_link.link, article_link.date)
             if not content:
                 logger.warning(f"Failed to get content for article: {article_link.link}")
                 continue
-                
-            # Process article content
+
             processed = self.process_article_content(content)
             if not processed:
                 logger.warning(f"Failed to process content for article: {article_link.link}")
                 continue
                 
-            # Add to list of articles
             articles.append(processed)
             
         return articles 

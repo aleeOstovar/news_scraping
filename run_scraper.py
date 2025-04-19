@@ -4,6 +4,13 @@ Simple script to run the scraper directly for testing
 """
 import logging
 import sys
+import argparse
+
+# Parse command line arguments
+parser = argparse.ArgumentParser(description="Run a specific news scraper")
+parser.add_argument("scraper", type=str, nargs="?", default="mihan_blockchain", 
+                    help="Name of the scraper to run (mihan_blockchain, arzdigital, defier)")
+args = parser.parse_args()
 
 # Configure logging to show detailed output
 logging.basicConfig(
@@ -21,14 +28,18 @@ from app.controllers.scraper_controller import ScraperController
 print("Creating ScraperController instance...")
 controller = ScraperController()
 print(f"Initialized ScraperController with {len(controller.scrapers)} scrapers")
+print(f"Available scrapers: {list(controller.scrapers.keys())}")
 
-# Check the processed URLs loaded - this appears to be debug code only, can be commented out
-# print(f"Number of processed URLs loaded: {len(controller._processed_urls)}")
-# print(f"First 5 processed URLs (if any): {list(controller._processed_urls)[:5] if controller._processed_urls else []}")
+# Validate the requested scraper
+scraper_name = args.scraper
+if scraper_name not in controller.scrapers:
+    print(f"Error: Scraper '{scraper_name}' not found or not enabled.")
+    print(f"Available scrapers: {list(controller.scrapers.keys())}")
+    sys.exit(1)
 
-# Run the scraper
-print("\nRunning mihan_blockchain scraper...")
-results = controller.run_scraper('mihan_blockchain')
+# Run the selected scraper
+print(f"\nRunning {scraper_name} scraper...")
+results = controller.run_scraper(scraper_name)
 
 # Print the results
 print(f"\nScraper completed. Processed {len(results)} articles.")

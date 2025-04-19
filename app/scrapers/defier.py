@@ -23,12 +23,11 @@ class DefierScraper(BaseScraper):
         Initialize the Defier scraper.
         
         Args:
-            api_client: API client for sending data
+            api_client: An instance of the APIClient for uploading images.
             max_age_days: Maximum age of articles to scrape in days
         """
         super().__init__("Defier", max_age_days)
-        if api_client:
-            self.api_client = api_client
+        self.api_client = api_client
         
     def get_article_links(self, url: str) -> List[ArticleLinkModel]:
         """
@@ -36,81 +35,76 @@ class DefierScraper(BaseScraper):
         """
         result = []
         soup = self.get_soup(url)
-
+        
         if not soup:
             logger.error(f"Failed to fetch and parse URL: {url}")
             return result
+            
 
         current_time = datetime.now(timezone.utc)
+        
 
-        # Find article elements on the page
-        articles = soup.select('article')
-
+        articles = soup.select('main.site-main > div.harika-flex-row > div.main-col > div.page-content > article.post')
+        
         logger.info(f"Found {len(articles)} total articles on the page, will collect all within the past {self.max_age_days} days")
-
+        
         for article in articles:
             try:
-                # Extract the link
-                link_element = article.find('a')
+
+                link_element = article.select_one('div.content > h2.entry-title> a')
                 if not link_element or not link_element.has_attr('href'):
                     continue
-
+                    
                 link = link_element['href'].strip()
                 
-                # Extract the date
-                date_element = article.select_one('time')
+
+                date_element = article.select_one('div.content > div.archive-meta > div.meta > span.date')
                 if not date_element:
                     continue
+                    
+                date_str = date_element.get_text(strip=True)
 
-                # The date format is Persian like "۱۸ فروردین ۱۴۰۴"
-                date_text = date_element.get_text(strip=True)
-                
                 try:
-                    # Parse Persian date
-                    # Expected format: "۱۸ فروردین ۱۴۰۴"
-                    parts = date_text.split()
-                    if len(parts) != 3:
-                        logger.warning(f"Unexpected date format: {date_text}")
-                        continue
-                        
-                    # Convert Persian digits to English
-                    day = self._convert_persian_numbers(parts[0])
-                    month_name = parts[1]
-                    year = self._convert_persian_numbers(parts[2])
-                    
-                    # Map Persian month name to month number
-                    if month_name not in settings.PERSIAN_MONTHS:
-                        logger.warning(f"Unknown Persian month: {month_name}")
-                        continue
-                        
-                    month = settings.PERSIAN_MONTHS[month_name]
-                    
-                    # Create JalaliDateTime and convert to Gregorian
-                    jalali_date = JalaliDateTime(int(year), month, int(day))
-                    gregorian_date = jalali_date.to_gregorian()
-                    
-                    # Convert to datetime with timezone
-                    article_datetime = datetime.combine(gregorian_date, datetime.min.time())
-                    article_datetime = article_datetime.replace(tzinfo=timezone.utc)
-                    
-                    # Check if article is within max_age_days
-                    time_diff = current_time - article_datetime
-                    if time_diff <= timedelta(days=self.max_age_days):
-                        formatted_date = article_datetime.strftime('%Y-%m-%d')
-                        result.append(ArticleLinkModel(
-                            link=link,
-                            date=formatted_date
-                        ))
-                except Exception as e:
-                    logger.error(f"Error parsing date {date_text}: {e}")
+                    date_parts = date_str.split()
+                    if len(date_parts) >= 3:
+                        day = int(date_parts[0])
+                        month_name = date_parts[1]
+                        year = int(date_parts[2])
 
+                        month = settings.PERSIAN_MONTHS.get(month_name)
+                        if not month:
+                            logger.error(f"Unknown Persian month: {month_name}")
+                            continue
+
+                        jalali_date = JalaliDateTime(year, month, day)
+                        gregorian_date = jalali_date.to_gregorian()
+
+                        article_datetime = datetime(
+                            gregorian_date.year,
+                            gregorian_date.month,
+                            gregorian_date.day,
+                            tzinfo=timezone.utc
+                        )
+
+                        time_diff = current_time - article_datetime
+                        if time_diff <= timedelta(days=self.max_age_days):
+                            formatted_date = article_datetime.strftime('%Y-%m-%d')
+                            result.append(ArticleLinkModel(
+                                link=link,
+                                date=formatted_date
+                            ))
+                            
+                except Exception as e:
+                    logger.error(f"Error converting date {date_str}: {e}")
+                    
             except Exception as e:
                 logger.error(f"Error processing article: {e}")
+        
+        logger.info(f"Found {len(result)} articles within the last {min(self.max_age_days, 3)} days")
+        
 
-        logger.info(f"Found {len(result)} articles within the last {self.max_age_days} days")
-
-        # Sort articles from newest to oldest
         result.sort(key=lambda x: x.date, reverse=True)
+        
         return result
         
     def get_article_content(self, url: str, date: str) -> Optional[ArticleContentModel]:
@@ -119,38 +113,39 @@ class DefierScraper(BaseScraper):
         """
         soup = self.get_soup(url)
         
+    
         if not soup:
             logger.error(f"Failed to fetch and parse URL: {url}")
             return None
         
         try:
-            # Extract the data content, keeping the HTML tags
-            article_content = soup.select_one('article')
-            if not article_content:
-                logger.error(f"Could not find article content for: {url}")
+
+            data = soup.select_one('section.elementor-section > div.elementor-container > div.elementor-column > div.elementor-widget-wrap > section.elementor-section > div.elementor-container > div.elementor-column > div.elementor-widget-wrap   ')
+            if not data:
+                logger.error(f"Could not find content div for article: {url}")
                 return None
             
-            data_html = article_content.decode_contents()
+            data_html = data.decode_contents()
 
-            # Extract the creator - look for the author byline
-            creator = soup.select_one('article .author') or soup.select_one('article .creator')
-            creator_name = creator.get_text(strip=True) if creator else "Defier"
 
-            # Extract the title
-            title = soup.select_one('h1')
-            title_text = title.get_text(strip=True) if title else "Unknown Title"
+            creator = soup.select_one('div.elementor-element > div.elementor-widget-container > div.harika-metadata-widget > span.author')
+            creator_name = creator.get_text(strip=True) if creator else "N/A"
+
+
+            title = soup.select_one('div.elementor-element > div.elementor-widget-container > h1.elementor-heading-title')
+            title_text = title.get_text(strip=True) if title else "N/A"
             
-            # Extract thumbnail image
-            thumbnail_image = self.extract_thumbnail_image(soup)
-            
-            # Create and return the model
+
+            thumbnail_image = self.extract_thumbnail_image(data_html)
+            logger.info(f"Extracted thumbnail in get_article_content: {thumbnail_image}")
+
             return ArticleContentModel(
                 link=url,
                 date=date,
                 data=data_html,
                 creator=creator_name,
                 title=title_text,
-                thumbnail_image=thumbnail_image 
+                thumbnail_image=thumbnail_image # Pass thumbnail here
             )
         
         except Exception as e:
@@ -207,7 +202,7 @@ class DefierScraper(BaseScraper):
             # Extract tags
             tags = self.extract_tags(html_content)
             
-            # Create ImageModel objects for each uploaded image
+            # Create ImageModel objects for each *uploaded* image
             image_models = [
                 ImageModel(
                     id=img['id'],
@@ -237,186 +232,237 @@ class DefierScraper(BaseScraper):
             logger.error(f"Error processing article content for {article.link}: {e}")
             return None
             
-    def extract_thumbnail_image(self, soup: BeautifulSoup) -> Optional[str]:
+    def extract_thumbnail_image(self, html: str) -> Optional[str]:
         """
         Extract the thumbnail image from the article HTML.
         """
+        soup = BeautifulSoup(html, 'html.parser')
+        
+        
         try:
-            # Look for the main article image
-            featured_img = soup.select_one('article img') or soup.select_one('header img')
-            if featured_img and 'src' in featured_img.attrs:
-                return featured_img['src']
+
+            featured_img = soup.select_one('div.elementor-element > div.elementor-widget-container > div.harika-featuredimage-widget')
+            if featured_img:
+                img_tag = featured_img.select_one('img')
+                if img_tag and 'src' in img_tag.attrs:
+                    return img_tag['src']
+            
                 
-            # Try other common selectors
-            meta_image = soup.select_one('meta[property="og:image"]')
-            if meta_image and 'content' in meta_image.attrs:
-                return meta_image['content']
         except Exception as e:
             logger.error(f"Error extracting thumbnail image: {e}")
             
         return None
         
-    def extract_and_replace_images(self, html: str) -> Tuple[str, List[Dict]]:
+    def extract_and_replace_images(self,html: str) -> tuple[str, list[dict]]:
         """
-        Extract images from HTML content and replace them with placeholders.
-        
-        Args:
-            html: HTML content to process
-            
-        Returns:
-            Tuple of (HTML with image placeholders, list of extracted image data)
+        right now Defier has no images in the articles
         """
+        processed_html = html
+        images_url = []
+        return processed_html, images_url
+
+    def extract_content(self, html: str) -> dict:
+        """
+        right now Defier has only p tags in the articles
+        Returns a dictionary with keys like p0, p1, ..., each containing the paragraph text.
+        Cleans extra whitespace and ignores empty paragraphs.
+        """
+        html = self.fix_html_paragraphs(html)
         soup = BeautifulSoup(html, 'html.parser')
-        images = []
-        img_id = 0
+        content_elements = {}
+
+        content_container = soup.select_one('div.elementor-element.elementor-element-f41c1d8.no-bg.elementor-widget.elementor-widget-theme-post-content')
+        if not content_container:
+            content_container = soup.body if soup.body else soup
+
+        p_counter = 0
+        blockquote_counter = 0
         
-        # Find all img tags
-        img_tags = soup.find_all('img')
-        for img in img_tags:
-            try:
-                if not img.has_attr('src'):
-                    continue
-                    
-                img_id += 1
-                img_url = img['src']
-                
-                # Check if the image URL is valid
-                if not img_url or img_url.startswith('data:'):
-                    continue
-                    
-                # Create a placeholder to be replaced later
-                placeholder = f"__IMAGE_PLACEHOLDER_{img_id}__"
-                
-                # Extract image caption from surrounding elements
-                caption = ""
-                figcaption = img.find_parent('figure').find('figcaption') if img.find_parent('figure') else None
-                if figcaption:
-                    caption = figcaption.get_text(strip=True)
-                
-                # Create image data
-                image_data = {
-                    'id': img_id,
-                    'url': img_url,
-                    'caption': caption,
-                    'type': 'image'
-                }
-                
-                images.append(image_data)
-                
-                # Replace the img with placeholder
-                img.replace_with(BeautifulSoup(placeholder, 'html.parser'))
-                
-            except Exception as e:
-                logger.error(f"Error extracting image: {e}")
+        # Get all elements in order, both p and blockquote
+        elements = content_container.find_all(['p', 'blockquote'], recursive=True)
         
-        return str(soup), images
-        
-    def extract_content(self, html: str) -> Dict:
-        """
-        Extract and structure content from HTML.
-        """
-        soup = BeautifulSoup(html, 'html.parser')
-        
-        # Find all paragraphs in main content area
-        paragraphs = []
-        content_sections = []
-        
-        # Get all paragraph-like elements
-        p_elements = soup.find_all(['p', 'h2', 'h3', 'h4', 'blockquote', 'ul', 'ol'])
-        
-        for elem in p_elements:
-            # Skip elements in excluded containers
-            if self.is_in_excluded_container(str(soup), soup.decode_contents().find(str(elem))):
+        for element in elements:
+            # Skip paragraphs inside blockquotes
+            if element.name == 'p' and element.parent.name == 'blockquote':
                 continue
                 
-            elem_html = str(elem)
+            text = element.get_text(separator=" ", strip=True)
+            text = re.sub(r'\s+', ' ', text).strip()
             
-            # Handle image placeholders in paragraph
-            if '__IMAGE_PLACEHOLDER_' in elem_html:
-                content_sections.append({
-                    "type": "paragraph",
-                    "content": paragraphs
-                })
-                paragraphs = []
+            if not text:
+                continue
                 
-                # Add image section
-                image_id_match = re.search(r'__IMAGE_PLACEHOLDER_(\d+)__', elem_html)
-                if image_id_match:
-                    image_id = int(image_id_match.group(1))
-                    content_sections.append({
-                        "type": "image",
-                        "id": image_id
-                    })
-            else:
-                # Process paragraph
-                text = elem.get_text(strip=True)
-                if text:
-                    paragraphs.append(text)
+            if element.name == 'p':
+                content_elements[f"p{p_counter}"] = text
+                p_counter += 1
+            elif element.name == 'blockquote':
+                content_elements[f"blockquote{blockquote_counter}"] = text
+                blockquote_counter += 1
         
-        # Add remaining paragraphs
-        if paragraphs:
-            content_sections.append({
-                "type": "paragraph",
-                "content": paragraphs
-            })
-        
-        return {
-            "sections": content_sections
-        }
-        
+        return content_elements
+            
     def extract_tags(self, html: str) -> List[str]:
         """
-        Extract tags from article HTML.
+        Extract tags from the article HTML.
+        
+        Args:
+            html: HTML content of the article
+            
+        Returns:
+            List of tags
         """
         soup = BeautifulSoup(html, 'html.parser')
         tags = []
         
-        # Look for tag elements - these are typically in a tags section or category links
-        tag_elements = soup.select('.tags a') or soup.select('.categories a') or soup.select('.topics a')
-        
-        for tag_elem in tag_elements:
-            tag_text = tag_elem.get_text(strip=True)
-            if tag_text and tag_text not in tags:
-                tags.append(tag_text)
+        try:
+            tag_container = soup.select_one('div.elementor-element.elementor-widget-HarikaSACategories > div.elementor-widget-container > div.harika-categories-widget')
+            if tag_container:
+                tag_links = tag_container.select('a')
+                for tag_link in tag_links:
+                    tag_text = tag_link.get_text(strip=True)
+                    if tag_text and tag_text not in tags:
+                        tags.append(tag_text)
+                        
+            # Limit to a maximum of 10 tags
+            if len(tags) > 10:
+                tags = tags[:10]
                 
-        # If no tags found, extract from meta keywords
-        if not tags:
-            meta_keywords = soup.select_one('meta[name="keywords"]')
-            if meta_keywords and meta_keywords.has_attr('content'):
-                keywords = meta_keywords['content'].split(',')
-                tags = [k.strip() for k in keywords if k.strip()]
-                
-        return tags
-        
-    def is_in_excluded_container(self, html: str, position: int) -> bool:
-        """Check if the given position is within an excluded container."""
-        # Define patterns for elements to exclude (comments, headers, footers, sidebars, etc.)
-        excluded_patterns = [
-            r'<footer.*?>.*?</footer>',
-            r'<aside.*?>.*?</aside>',
-            r'<nav.*?>.*?</nav>',
-            r'<div[^>]*class="[^"]*comment[^"]*"[^>]*>.*?</div>',
-            r'<div[^>]*class="[^"]*sidebar[^"]*"[^>]*>.*?</div>',
-            r'<div[^>]*class="[^"]*related[^"]*"[^>]*>.*?</div>'
-        ]
-        
-        for pattern in excluded_patterns:
-            for match in re.finditer(pattern, html, re.DOTALL | re.IGNORECASE):
-                if match.start() <= position <= match.end():
-                    return True
-        
-        return False
-        
-    def _convert_persian_numbers(self, persian_str: str) -> str:
-        """
-        Convert Persian/Arabic numerals to English numerals.
-        """
-        mapping = {
-            '۰': '0', '۱': '1', '۲': '2', '۳': '3', '۴': '4',
-            '۵': '5', '۶': '6', '۷': '7', '۸': '8', '۹': '9'
-        }
-        
-        for persian_digit, english_digit in mapping.items():
-            persian_str = persian_str.replace(persian_digit, english_digit)
+            return tags
             
-        return persian_str 
+        except Exception as e:
+            logger.error(f"Error extracting tags: {e}")
+            return []
+    
+
+    def is_in_excluded_container(self, html: str, position: int) -> bool:
+        """
+        Check if the given position in HTML is within an excluded container.
+        This is a placeholder function - implement according to your exclusion criteria.
+        
+        Args:
+            html: The HTML content
+            position: The position to check
+            
+        Returns:
+            True if position is in an excluded container, False otherwise
+        """
+        excluded_containers = [
+        "jeg_share_bottom_container",
+        "jeg_ad_jeg_article_jnews_content_bottom_ads",
+        "jnews_prev_next_container",
+        "jnews_author_box_container",
+        "jnews_related_post_container",
+        "jeg_postblock_22 jeg_postblock jeg_module_hook jeg_pagination_disable jeg_col_2o3 jnews_module_307974_0_67c3fad848cb2",
+        "jnews_popup_post_container",
+        "jnews_comment_container",
+        ]
+        snippet = html[position:position+100]
+        
+        for container in excluded_containers:
+            pattern = r'<div[^>]*class="[^"]*' + re.escape(container) + r'[^"]*"[^>]*>[\s\S]*?' + re.escape(snippet)
+            if re.search(pattern, html, re.IGNORECASE):
+                return True
+        return False
+    def fix_html_paragraphs(self,html_content: str) -> str:
+        """
+        Processes the HTML content to ensure that if a <p> tag is open and one of the following
+        tags is encountered as an opening tag:
+        - another <p> tag
+        - any <h1> to <h6> tag
+        - a <figure> tag
+        - a <blockquote> tag
+        then a closing </p> tag is inserted before the trigger tag.
+        
+        If a <p> tag is already closed, nothing is added.
+        
+        Also removes p tags inside blockquotes while preserving their content.
+        Additionally removes a tags inside blockquotes while preserving their content and adding a space after.
+        """
+        soup = BeautifulSoup(html_content, 'html.parser')
+        
+        for blockquote in soup.find_all('blockquote'):
+            for a_tag in blockquote.find_all('a', recursive=True):
+                a_text = a_tag.get_text()
+                a_tag.replace_with(f"{a_text} ")
+            for strong_tag in blockquote.find_all('strong', recursive=True):
+                strong_text = strong_tag.get_text()
+                strong_tag.replace_with(f"{strong_text} ")
+            
+            for p_tag in blockquote.find_all('p', recursive=True):
+                p_tag.replace_with(*p_tag.contents)
+        
+        html_content = str(soup)
+        
+        pattern = re.compile(
+            r'(<\s*(/)?\s*(p|h[1-6]|figure|blockquote)\b[^>]*>)', 
+            re.IGNORECASE
+        )
+        
+        result = []
+        last_index = 0
+        p_opened = False
+
+        for match in pattern.finditer(html_content):
+            full_tag = match.group(1)   
+            is_closing = bool(match.group(2)) 
+            tag_type = match.group(3).lower() 
+            start, end = match.span(1)
+            
+
+            result.append(html_content[last_index:start])
+            
+
+            if not is_closing and tag_type in ('p', 'figure', 'blockquote') or (not is_closing and tag_type.startswith('h')):
+                if p_opened:
+                    result.append('</p>')
+                    p_opened = False
+            
+            result.append(full_tag)
+            
+            if tag_type == 'p':
+                if is_closing:
+                    p_opened = False
+                else:
+                    p_opened = True
+
+            last_index = end
+
+        result.append(html_content[last_index:])
+        
+
+        if p_opened:
+            result.append('</p>')
+        
+        return ''.join(result)
+
+    def scrape_articles(self, base_url: str) -> List[ArticleFullModel]:
+        """
+        Scrape articles from Defier website.
+        
+        Args:
+            base_url: Base URL of the website
+            
+        Returns:
+            List of processed articles
+        """
+        articles = []
+        
+        article_links = self.get_article_links(base_url)
+        logger.info(f"Found {len(article_links)} article links")
+        
+        for i, article_link in enumerate(article_links):
+            logger.info(f"Processing article {i+1}/{len(article_links)}: {article_link.link}")
+            
+            content = self.get_article_content(article_link.link, article_link.date)
+            if not content:
+                logger.warning(f"Failed to get content for article: {article_link.link}")
+                continue
+
+            processed = self.process_article_content(content)
+            if not processed:
+                logger.warning(f"Failed to process content for article: {article_link.link}")
+                continue
+                
+            articles.append(processed)
+            
+        return articles 
